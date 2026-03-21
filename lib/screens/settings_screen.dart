@@ -158,6 +158,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
               mode: LaunchMode.externalApplication,
             ),
           ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.coffee_rounded),
+            title: const Text('Buy me a coffee'),
+            subtitle: const Text('Support the development of offmusic'),
+            onTap: () => launchUrl(
+              Uri.parse('https://buymeacoffee.com/salar_shdk'),
+              mode: LaunchMode.externalApplication,
+            ),
+          ),
         ],
       ),
     );

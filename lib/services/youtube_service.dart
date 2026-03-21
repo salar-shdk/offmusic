@@ -65,6 +65,11 @@ class YouTubeService {
   static const _kMusicSearchUrl =
       'https://music.youtube.com/youtubei/v1/search'
       '?key=AIzaSyC9XL3ZjWddXya6X74dJoCTL-KLET5f07I';
+
+  // YouTube Music browse endpoint (for album/artist pages)
+  static const _kMusicBrowseUrl =
+      'https://music.youtube.com/youtubei/v1/browse'
+      '?key=AIzaSyC9XL3ZjWddXya6X74dJoCTL-KLET5f07I';
   static const _kMusicClientVersion = '1.20240101.01.00';
   static const _kSongsFilterParam   = 'EgWKAQIIAWoKEAQQAxAJEAUQCg==';
   static const _kAlbumsFilterParam  = 'EgWKAQIYAWoKEAQQAxAJEAUQCg==';
@@ -136,6 +141,29 @@ class YouTubeService {
   }
 
   Future<List<Song>> searchSongs(String query) => _searchMusicSongs(query);
+
+  /// Returns a list of songs similar to [seed] using the search endpoint.
+  /// Searches by artist first, falls back to title if artist is empty.
+  /// This uses the same reliable search API as song search.
+  Future<List<Song>> getSimilarSongs(Song seed) async {
+    final queries = <String>[
+      if (seed.artist.isNotEmpty) seed.artist,
+      if (seed.title.isNotEmpty) seed.title,
+    ];
+    for (final query in queries) {
+      try {
+        final data = await _musicSearch(query, _kSongsFilterParam);
+        if (data == null) continue;
+        final songs = <Song>[];
+        for (final item in _musicShelfItems(data)) {
+          final song = _parseMusicSong(item);
+          if (song != null && song.id != seed.id) songs.add(song);
+        }
+        if (songs.isNotEmpty) return songs;
+      } catch (_) {}
+    }
+    return [];
+  }
 
   /// Searches YouTube Music for songs using the InnerTube WEB_REMIX client.
   Future<List<Song>> _searchMusicSongs(String query) async {
@@ -304,79 +332,251 @@ class YouTubeService {
   }
 
   /// YouTube Music album search via InnerTube (WEB_REMIX client).
+  /// Albums come back as musicResponsiveListItemRenderer (same renderer as
+  /// songs/artists), with the browse ID in navigationEndpoint.browseEndpoint.
   Future<List<Album>> _searchAlbumsViaMusicApi(String query) async {
     try {
       final data = await _musicSearch(query, _kAlbumsFilterParam);
       if (data == null) return [];
       final albums = <Album>[];
-
-      final tabs = (data['contents'] as Map<String, dynamic>?)
-          ?['tabbedSearchResultsRenderer']?['tabs'] as List<dynamic>?;
-      final sectionContents = tabs
-          ?.firstOrNull?['tabRenderer']?['content']
-          ?['sectionListRenderer']?['contents'] as List<dynamic>?;
-      if (sectionContents == null) return [];
-
-      for (final section in sectionContents) {
-        final shelf =
-            section['musicShelfRenderer'] as Map<String, dynamic>?;
-        if (shelf == null) continue;
-
-        for (final item in (shelf['contents'] as List<dynamic>? ?? [])) {
-          final renderer =
-              item['musicTwoRowItemRenderer'] as Map<String, dynamic>?;
-          if (renderer == null) continue;
-
-          final title = (renderer['title']?['runs'] as List<dynamic>?)
-              ?.firstOrNull?['text'] as String?;
-          final browseId = renderer['navigationEndpoint']
-              ?['browseEndpoint']?['browseId'] as String?;
-          if (title == null || browseId == null) continue;
-
-          final subtitleRuns =
-              renderer['subtitle']?['runs'] as List<dynamic>?;
-          final artist = subtitleRuns
-                  ?.map((r) => r['text'] as String? ?? '')
-                  .join('') ??
-              '';
-
-          final thumbList = (renderer['thumbnailRenderer']
-                      ?['musicThumbnailRenderer']?['thumbnail']
-                  ?['thumbnails'] as List<dynamic>?) ??
-              [];
-          final thumbUrl = thumbList.isNotEmpty
-              ? (thumbList.last['url'] as String? ?? '')
-              : '';
-
-          int year = DateTime.now().year;
-          if (subtitleRuns != null) {
-            for (final run in subtitleRuns) {
-              final parsed = int.tryParse((run['text'] as String? ?? '').trim());
-              if (parsed != null &&
-                  parsed > 1900 &&
-                  parsed <= DateTime.now().year) {
-                year = parsed;
-                break;
-              }
-            }
-          }
-
-          albums.add(Album(
-            id: browseId,
-            title: title,
-            artist: artist,
-            artistId: '',
-            thumbnailUrl: thumbUrl,
-            year: year,
-            songIds: [],
-          ));
-        }
+      for (final item in _musicShelfItems(data)) {
+        final album = _parseMusicAlbum(item);
+        if (album != null) albums.add(album);
       }
-
       return albums;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[YT] album search error: $e');
       return [];
     }
+  }
+
+  Album? _parseMusicAlbum(dynamic raw) {
+    final item = (raw as Map?)
+        ?['musicResponsiveListItemRenderer'] as Map<String, dynamic>?;
+    if (item == null) return null;
+
+    // Browse ID for the album page.
+    final browseId = _dig(item, [
+      'navigationEndpoint', 'browseEndpoint', 'browseId',
+    ]) as String?;
+    if (browseId == null) return null;
+
+    final cols = item['flexColumns'] as List?;
+    final title = _dig(cols, [
+      0, 'musicResponsiveListItemFlexColumnRenderer', 'text', 'runs', 0, 'text',
+    ]) as String?;
+    if (title == null) return null;
+
+    // col[1] runs: ["Album", " • ", "Artist Name", " • ", "Year"]
+    // The artist run has a navigationEndpoint; year is a parseable 4-digit int.
+    final subtitleRuns = (_dig(cols, [
+      1, 'musicResponsiveListItemFlexColumnRenderer', 'text', 'runs',
+    ]) as List?) ?? [];
+
+    String artist = '';
+    int year = DateTime.now().year;
+    for (final run in subtitleRuns) {
+      final text = (run['text'] as String? ?? '').trim();
+      // Artist run has a navigation endpoint.
+      if (artist.isEmpty && run['navigationEndpoint'] != null && text.isNotEmpty) {
+        artist = text;
+        continue;
+      }
+      // Year is a 4-digit number in the valid range.
+      final parsed = int.tryParse(text);
+      if (parsed != null && parsed > 1900 && parsed <= DateTime.now().year) {
+        year = parsed;
+      }
+    }
+
+    final thumbs = _dig(item, [
+      'thumbnail', 'musicThumbnailRenderer', 'thumbnail', 'thumbnails',
+    ]) as List?;
+    final thumbUrl = thumbs?.isNotEmpty == true
+        ? (thumbs!.last['url'] as String? ?? '')
+        : '';
+
+    return Album(
+      id: browseId,
+      title: title,
+      artist: artist,
+      artistId: '',
+      thumbnailUrl: thumbUrl,
+      year: year,
+      songIds: [],
+    );
+  }
+
+  // ── Album songs (InnerTube browse) ───────────────────────────────────────────
+
+  /// Fetches the song list for an album using the InnerTube browse endpoint.
+  /// [browseId] is an `MPREb_...` browse ID returned by album search.
+  /// Returns (songs, albumThumbnailUrl). Song thumbnails fall back to the
+  /// album header art when individual items don't carry their own thumbnail.
+  Future<(List<Song>, String)> getAlbumSongs(String browseId,
+      {String fallbackThumb = ''}) async {
+    try {
+      final response = await _httpClient
+          .post(
+            Uri.parse(_kMusicBrowseUrl),
+            headers: const {
+              'Content-Type': 'application/json',
+              'User-Agent': 'Mozilla/5.0',
+              'X-YouTube-Client-Name': '67',
+              'X-YouTube-Client-Version': _kMusicClientVersion,
+              'Origin': 'https://music.youtube.com',
+              'Referer': 'https://music.youtube.com/',
+            },
+            body: jsonEncode({
+              'context': {
+                'client': {
+                  'clientName': 'WEB_REMIX',
+                  'clientVersion': _kMusicClientVersion,
+                  'hl': 'en',
+                  'gl': 'US',
+                },
+              },
+              'browseId': browseId,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode != 200) return (<Song>[], '');
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+      // Extract album thumbnail from header to use as fallback for each song.
+      // Try musicDetailHeaderRenderer first, then musicImmersiveHeaderRenderer.
+      String albumThumb = '';
+      for (final headerKey in [
+        'musicDetailHeaderRenderer',
+        'musicImmersiveHeaderRenderer',
+      ]) {
+        final thumbs = (_dig(data, [
+              'header',
+              headerKey,
+              'thumbnail',
+              'croppedSquareThumbnailRenderer',
+              'thumbnail',
+              'thumbnails',
+            ]) ??
+            _dig(data, [
+              'header',
+              headerKey,
+              'thumbnail',
+              'musicThumbnailRenderer',
+              'thumbnail',
+              'thumbnails',
+            ])) as List?;
+        if (thumbs != null && thumbs.isNotEmpty) {
+          albumThumb = thumbs.last['url'] as String? ?? '';
+          break;
+        }
+      }
+      if (albumThumb.isEmpty) albumThumb = fallbackThumb;
+
+      // Path: contents.twoColumnBrowseResultsRenderer.secondaryContents
+      //       .sectionListRenderer.contents[].musicShelfRenderer.contents[]
+      final secondary = _dig(data, [
+        'contents',
+        'twoColumnBrowseResultsRenderer',
+        'secondaryContents',
+        'sectionListRenderer',
+        'contents',
+      ]) as List?;
+      if (secondary == null) return (<Song>[], albumThumb);
+
+      final songs = <Song>[];
+      for (final section in secondary) {
+        final items =
+            (section['musicShelfRenderer']?['contents'] as List?) ?? [];
+        for (final raw in items) {
+          final song = _parseAlbumSong(raw, albumThumb);
+          if (song != null) songs.add(song);
+        }
+      }
+      return (songs, albumThumb);
+    } catch (e) {
+      debugPrint('[YT] getAlbumSongs error: $e');
+      return (<Song>[], '');
+    }
+  }
+
+  Song? _parseAlbumSong(dynamic raw, [String albumThumb = '']) {
+    final item = (raw as Map?)
+        ?['musicResponsiveListItemRenderer'] as Map<String, dynamic>?;
+    if (item == null) return null;
+
+    // videoId is in the overlay play button path.
+    final videoId = _dig(item, [
+      'overlay',
+      'musicItemThumbnailOverlayRenderer',
+      'content',
+      'musicPlayButtonRenderer',
+      'playNavigationEndpoint',
+      'watchEndpoint',
+      'videoId',
+    ]) as String?;
+    if (videoId == null) return null;
+
+    final cols = item['flexColumns'] as List?;
+    final title = _dig(cols, [
+      0,
+      'musicResponsiveListItemFlexColumnRenderer',
+      'text',
+      'runs',
+      0,
+      'text',
+    ]) as String?;
+    if (title == null) return null;
+
+    // artist is in flexColumns[1] runs
+    final artist = _dig(cols, [
+      1,
+      'musicResponsiveListItemFlexColumnRenderer',
+      'text',
+      'runs',
+      0,
+      'text',
+    ]) as String? ?? '';
+
+    // Duration from fixedColumns[0] e.g. "4:59"
+    final durationStr = _dig(item, [
+      'fixedColumns',
+      0,
+      'musicResponsiveListItemFixedColumnRenderer',
+      'text',
+      'runs',
+      0,
+      'text',
+    ]) as String? ?? '';
+    int durationSeconds = 0;
+    final parts = durationStr.split(':');
+    if (parts.length == 2) {
+      durationSeconds =
+          (int.tryParse(parts[0]) ?? 0) * 60 + (int.tryParse(parts[1]) ?? 0);
+    }
+
+    final thumbs = _dig(item, [
+      'thumbnail',
+      'musicThumbnailRenderer',
+      'thumbnail',
+      'thumbnails',
+    ]) as List?;
+    final songThumb = thumbs != null && thumbs.isNotEmpty
+        ? (thumbs.last['url'] as String? ?? '')
+        : '';
+    final thumb = songThumb.isNotEmpty ? songThumb : albumThumb;
+
+    return Song(
+      id: videoId,
+      title: title,
+      artist: artist,
+      artistId: '',
+      album: '',
+      albumId: '',
+      thumbnailUrl: thumb,
+      durationSeconds: durationSeconds,
+    );
   }
 
   // ── Stream URL (Kreate's multi-client approach) ───────────────────────────────

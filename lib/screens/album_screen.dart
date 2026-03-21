@@ -29,11 +29,14 @@ class _AlbumScreenState extends State<AlbumScreen> {
 
   Future<void> _loadSongs() async {
     final yt = context.read<YouTubeService>();
-    final songs = await yt.getPlaylistSongs(widget.album.id);
-    if (mounted) setState(() {
-      _songs = songs;
-      _loading = false;
-    });
+    final (songs, _) = await yt.getAlbumSongs(widget.album.id,
+        fallbackThumb: widget.album.thumbnailUrl);
+    if (mounted) {
+      setState(() {
+        _songs = songs;
+        _loading = false;
+      });
+    }
   }
 
   @override
@@ -47,78 +50,85 @@ class _AlbumScreenState extends State<AlbumScreen> {
       body: CustomScrollView(
         slivers: [
           SliverAppBar(
-            expandedHeight: 280,
             pinned: true,
-            flexibleSpace: FlexibleSpaceBar(
-              title: Text(
-                album.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-              ),
-              background: Stack(
-                fit: StackFit.expand,
-                children: [
-                  CachedNetworkImage(
-                    imageUrl: album.thumbnailUrl,
-                    fit: BoxFit.cover,
-                    errorWidget: (_, __, ___) => Container(
-                      color: Colors.white10,
-                      child: const Icon(Icons.album_rounded,
-                          size: 80, color: Colors.white24),
-                    ),
-                  ),
-                  Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          Colors.black.withOpacity(0.8),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+            title: Text(
+              album.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
             ),
           ),
           SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-              child: Row(
-                children: [
-                  Column(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(album.artist,
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            color: theme.colorScheme.primary,
-                          )),
-                      if (album.year > 0)
-                        Text('${album.year}',
-                            style: theme.textTheme.bodyMedium),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: CachedNetworkImage(
+                          imageUrl: album.thumbnailUrl,
+                          width: 120,
+                          height: 120,
+                          fit: BoxFit.cover,
+                          errorWidget: (context, _, __) => Container(
+                            width: 120,
+                            height: 120,
+                            color: Colors.white10,
+                            child: const Icon(Icons.album_rounded,
+                                size: 48, color: Colors.white24),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(album.artist,
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  color: theme.colorScheme.primary,
+                                )),
+                            if (album.year > 0)
+                              Text('${album.year}',
+                                  style: theme.textTheme.bodyMedium),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                IconButton(
+                                  icon: Icon(
+                                    isLiked
+                                        ? Icons.bookmark_rounded
+                                        : Icons.bookmark_border_rounded,
+                                    color: isLiked
+                                        ? theme.colorScheme.primary
+                                        : Colors.white54,
+                                  ),
+                                  onPressed: () =>
+                                      library.toggleAlbumLike(album),
+                                ),
+                                if (_songs.isNotEmpty)
+                                  FilledButton.icon(
+                                    onPressed: () => context
+                                        .read<PlayerProvider>()
+                                        .playSong(_songs.first,
+                                            queue: _songs, index: 0),
+                                    icon: const Icon(Icons.play_arrow_rounded),
+                                    label: const Text('Play all'),
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
                     ],
                   ),
-                  const Spacer(),
-                  IconButton(
-                    icon: Icon(
-                      isLiked ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
-                      color: isLiked ? theme.colorScheme.primary : Colors.white54,
-                    ),
-                    onPressed: () => library.toggleAlbumLike(album),
-                  ),
-                  if (_songs.isNotEmpty)
-                    FilledButton.icon(
-                      onPressed: () => context
-                          .read<PlayerProvider>()
-                          .playSong(_songs.first, queue: _songs, index: 0),
-                      icon: const Icon(Icons.play_arrow_rounded),
-                      label: const Text('Play all'),
-                    ),
-                ],
-              ),
+                ),
+                const SizedBox(height: 8),
+              ],
             ),
           ),
           if (_loading)

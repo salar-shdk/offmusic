@@ -53,98 +53,99 @@ class _ArtistScreenState extends State<ArtistScreen> {
       body: CustomScrollView(
         slivers: [
           SliverAppBar(
-            expandedHeight: 240,
             pinned: true,
-            flexibleSpace: FlexibleSpaceBar(
-              title: Text(
-                artist.name,
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-              ),
-              background: Stack(
-                fit: StackFit.expand,
-                children: [
-                  artist.thumbnailUrl.isNotEmpty
-                      ? CachedNetworkImage(
-                          imageUrl: artist.thumbnailUrl,
-                          fit: BoxFit.cover,
-                          errorWidget: (_, __, ___) => Container(
-                            color: Colors.white10,
-                            child: const Icon(Icons.person_rounded,
-                                size: 80, color: Colors.white24),
-                          ),
-                        )
-                      : Container(
-                          color: Colors.white10,
-                          child: const Icon(Icons.person_rounded,
-                              size: 80, color: Colors.white24),
-                        ),
-                  Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          Colors.black.withOpacity(0.8),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+            title: Text(
+              artist.name,
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
             ),
           ),
           SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-              child: Row(
-                children: [
-                  if (artist.description != null && artist.description!.isNotEmpty)
-                    Expanded(
-                      child: Text(
-                        artist.description!,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodyMedium,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      ClipOval(
+                        child: CachedNetworkImage(
+                          imageUrl: artist.thumbnailUrl,
+                          width: 100,
+                          height: 100,
+                          fit: BoxFit.cover,
+                          errorWidget: (context, _, __) => Container(
+                            width: 100,
+                            height: 100,
+                            color: Colors.white10,
+                            child: const Icon(Icons.person_rounded,
+                                size: 48, color: Colors.white24),
+                          ),
+                        ),
                       ),
-                    )
-                  else
-                    const Spacer(),
-                  const SizedBox(width: 8),
-                  OutlinedButton.icon(
-                    onPressed: () => library.toggleArtistLike(artist),
-                    icon: Icon(
-                      isLiked ? Icons.person_remove_rounded : Icons.person_add_rounded,
-                      size: 18,
-                    ),
-                    label: Text(isLiked ? 'Following' : 'Follow'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: isLiked
-                          ? theme.colorScheme.primary
-                          : Colors.white70,
-                      side: BorderSide(
-                        color: isLiked
-                            ? theme.colorScheme.primary
-                            : Colors.white30,
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (artist.description != null &&
+                                artist.description!.isNotEmpty)
+                              Text(
+                                artist.description!,
+                                maxLines: 3,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodyMedium,
+                              ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                OutlinedButton.icon(
+                                  onPressed: () =>
+                                      library.toggleArtistLike(artist),
+                                  icon: Icon(
+                                    isLiked
+                                        ? Icons.person_remove_rounded
+                                        : Icons.person_add_rounded,
+                                    size: 18,
+                                  ),
+                                  label:
+                                      Text(isLiked ? 'Following' : 'Follow'),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: isLiked
+                                        ? theme.colorScheme.primary
+                                        : Colors.white70,
+                                    side: BorderSide(
+                                      color: isLiked
+                                          ? theme.colorScheme.primary
+                                          : Colors.white30,
+                                    ),
+                                  ),
+                                ),
+                                if (_songs.isNotEmpty) ...[
+                                  const SizedBox(width: 8),
+                                  FilledButton(
+                                    onPressed: () => context
+                                        .read<PlayerProvider>()
+                                        .playSong(_songs.first,
+                                            queue: _songs, index: 0),
+                                    style: FilledButton.styleFrom(
+                                      minimumSize: const Size(40, 40),
+                                      padding: const EdgeInsets.all(0),
+                                      shape: const CircleBorder(),
+                                    ),
+                                    child: const Icon(Icons.play_arrow_rounded),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
+                    ],
                   ),
-                  if (_songs.isNotEmpty) ...[
-                    const SizedBox(width: 8),
-                    FilledButton(
-                      onPressed: () => context
-                          .read<PlayerProvider>()
-                          .playSong(_songs.first, queue: _songs, index: 0),
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size(40, 40),
-                        padding: const EdgeInsets.all(0),
-                        shape: const CircleBorder(),
-                      ),
-                      child: const Icon(Icons.play_arrow_rounded),
-                    ),
-                  ],
-                ],
-              ),
+                ),
+                const SizedBox(height: 8),
+              ],
             ),
           ),
           if (_loading)

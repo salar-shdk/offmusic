@@ -120,7 +120,37 @@ class AudioPlayerService {
     final position = Duration(milliseconds: (map['position'] as num?)?.toInt() ?? 0);
     final duration = Duration(milliseconds: (map['duration'] as num?)?.toInt() ?? 0);
 
+    // If Flutter has no current song but Android reports one playing (e.g. the
+    // app was reopened while music was playing in the background), restore the
+    // current song from the native state so the UI reflects what's playing.
+    final nativeVideoId = map['videoId'] as String?;
+    Song? restoredSong;
+    if (_state.currentSong == null &&
+        nativeVideoId != null &&
+        nativeVideoId.isNotEmpty) {
+      restoredSong = _db.getSong(nativeVideoId);
+      if (restoredSong == null) {
+        // Build a minimal Song from the metadata in the event so the mini
+        // player and now-playing screen can at least show title/artist.
+        restoredSong = Song(
+          id: nativeVideoId,
+          title: map['title'] as String? ?? nativeVideoId,
+          artist: map['artist'] as String? ?? '',
+          artistId: '',
+          album: '',
+          albumId: '',
+          thumbnailUrl: map['thumbnailUrl'] as String? ?? '',
+          durationSeconds: duration.inSeconds,
+        );
+      }
+      debugPrint('[Audio] restored current song from native state: $nativeVideoId');
+    }
+
     _updateState(_state.copyWith(
+      currentSong: restoredSong ?? _state.currentSong,
+      queue: restoredSong != null && _state.queue.isEmpty
+          ? [restoredSong]
+          : null,
       isPlaying: isPlaying,
       isLoading: map['isLoading'] as bool? ?? _state.isLoading,
       position: position,

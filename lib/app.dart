@@ -64,7 +64,7 @@ class _OffMusicAppState extends State<OffMusicApp> {
           create: (_) => SearchProvider(_youtube),
         ),
         ChangeNotifierProvider(
-          create: (_) => HomeProvider(HomeService(), _db, _audioService),
+          create: (_) => HomeProvider(HomeService(), _db, _audioService, _youtube),
         ),
       ],
       child: MaterialApp(

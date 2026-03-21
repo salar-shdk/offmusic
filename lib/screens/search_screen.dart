@@ -301,7 +301,6 @@ class _AlbumsTab extends StatelessWidget {
               builder: (_) => AlbumScreen(album: album),
             ),
           ),
-          width: double.infinity,
         );
       },
     );

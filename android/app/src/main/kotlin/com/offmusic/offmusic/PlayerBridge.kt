@@ -18,15 +18,23 @@ class PlayerBridge(
     eventChannel: EventChannel,
 ) {
     private val appContext = context.applicationContext
-    private val player = OffmusicPlayer(appContext)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var eventSink: EventChannel.EventSink? = null
 
+    // Reuse the existing player if the service is already running (e.g. app
+    // was reopened while music was playing in the background). Creating a new
+    // player would leave the old ExoPlayer running and cause dual playback.
+    private val player: OffmusicPlayer = OffmusicService.sharedPlayer
+        ?: OffmusicPlayer(appContext)
+
     init {
-        // Give the service a reference to the player so it can create a
-        // MediaSession in onCreate(), then start the service.
-        OffmusicService.sharedPlayer = player
-        appContext.startService(Intent(appContext, OffmusicService::class.java))
+        // Only register the player and start the service if it isn't already
+        // running. If the service is live, it already has a MediaSession
+        // pointing at this same player instance.
+        if (OffmusicService.sharedPlayer == null) {
+            OffmusicService.sharedPlayer = player
+            appContext.startService(Intent(appContext, OffmusicService::class.java))
+        }
 
         // Forward all player state changes to Flutter via the event channel.
         player.onStateChange = { state ->

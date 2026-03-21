@@ -3,11 +3,13 @@ import '../models/song.dart';
 import '../services/audio_service.dart';
 import '../services/database_service.dart';
 import '../services/home_service.dart';
+import '../services/youtube_service.dart';
 
 class HomeProvider extends ChangeNotifier {
   final HomeService _homeService;
   final DatabaseService _db;
   final AudioPlayerService _audioService;
+  final YouTubeService _yt;
 
   List<Song> _recommendedSongs = [];
   bool _recommendedLoading = false;
@@ -15,7 +17,7 @@ class HomeProvider extends ChangeNotifier {
   // Only set after a SUCCESSFUL fill to allow retries on failure.
   String? _lastFilledSongId;
 
-  HomeProvider(this._homeService, this._db, this._audioService) {
+  HomeProvider(this._homeService, this._db, this._audioService, this._yt) {
     _loadRecommended();
     _audioService.stateStream.listen(_onPlayerState);
   }
@@ -64,27 +66,34 @@ class HomeProvider extends ChangeNotifier {
 
   // ── Quick Picks: explicit radio start ─────────────────────────────────────
 
-  /// Plays [song] immediately and fills the queue with related songs.
-  /// Fetches related songs concurrently with playback so the queue is ready ASAP.
+  /// Plays [song] immediately with an instant queue from recommended songs,
+  /// then enriches the queue with actual related songs in the background.
   Future<void> startRadio(Song song) async {
-    // Reserve this song ID upfront so _onPlayerState doesn't race us.
     _lastFilledSongId = song.id;
 
-    // Start fetching related songs concurrently with playback init.
-    final relatedFuture = _fetchRelated(song);
-    await _audioService.playSong(song, playlistMode: false);
+    // Build an immediate queue from already-loaded recommended songs so the
+    // user always sees a full queue without waiting for any network call.
+    final siblings = (_recommendedSongs.where((s) => s.id != song.id).toList()
+      ..shuffle());
+    final initialQueue = [song, ...siblings];
 
-    final related = await relatedFuture;
-    if (related.isEmpty) {
-      _lastFilledSongId = null; // allow retry via _onPlayerState
-      return;
-    }
+    await _audioService.playSong(
+      song,
+      queue: initialQueue.length > 1 ? initialQueue : null,
+      playlistMode: false,
+    );
+    debugPrint('[Home] startRadio: immediate queue of ${initialQueue.length} songs');
+
+    // Enrich with actual related songs in background.
+    final related = await _fetchRelated(song);
+    if (related.isEmpty) return;
 
     final current = _audioService.state.currentSong;
     if (current?.id != song.id) return; // user switched song
+    if (_audioService.state.playlistMode) return;
 
     _audioService.updateQueue([song, ...related.where((s) => s.id != song.id)]);
-    debugPrint('[Home] startRadio: queue filled with ${related.length} songs');
+    debugPrint('[Home] startRadio: enriched queue with ${related.length} related songs');
   }
 
   // ── Auto-fill for songs played from search / library ─────────────────────
@@ -135,7 +144,14 @@ class HomeProvider extends ChangeNotifier {
     if (_filling) return;
     _filling = true;
     try {
-      final songs = await _fetchRelated(seed);
+      var songs = await _fetchRelated(seed);
+
+      // Fallback to recommended songs if related fetch returned nothing.
+      if (songs.isEmpty && _recommendedSongs.isNotEmpty) {
+        songs = _recommendedSongs.where((s) => s.id != seed.id).toList()
+          ..shuffle();
+      }
+
       if (songs.isEmpty) return;
       if (_audioService.state.playlistMode) return;
 
@@ -154,19 +170,27 @@ class HomeProvider extends ChangeNotifier {
     }
   }
 
-  /// Fetches related songs; falls back to shuffled cached songs when offline.
+  /// Fetches songs similar to [seed] using search (reliable) then cached fallback.
   Future<List<Song>> _fetchRelated(Song seed) async {
+    // Primary: use the search-based getSimilarSongs which uses the same
+    // reliable endpoint as song search.
+    try {
+      final songs = await _yt.getSimilarSongs(seed);
+      if (songs.isNotEmpty) return songs;
+    } catch (_) {}
+
+    // Secondary: try the "next" related endpoint.
     try {
       final songs = await _homeService.getRelatedSongs(seed.id);
       if (songs.isNotEmpty) return songs;
     } catch (_) {}
 
+    // Offline fallback: shuffled cached songs.
     debugPrint('[Home] offline fallback queue for ${seed.id}');
-    final cached = _db.getCachedSongs()
+    return _db.getCachedSongs()
         .where((s) => s.id != seed.id)
         .toList()
       ..shuffle();
-    return cached;
   }
 
   // ── Category playback ─────────────────────────────────────────────────────

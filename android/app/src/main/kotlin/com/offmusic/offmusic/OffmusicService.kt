@@ -32,22 +32,26 @@ class OffmusicService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         val player = sharedPlayer ?: return
-        session = MediaSession.Builder(this, player.routingPlayer)
-            .setId("offmusic")
-            .build()
         // Use our existing small icon for the notification status bar icon.
         setMediaNotificationProvider(
             DefaultMediaNotificationProvider(this)
                 .also { it.setSmallIcon(R.drawable.ic_notif_music) }
         )
+        session = MediaSession.Builder(this, player.routingPlayer)
+            .setId("offmusic")
+            .build()
+        // addSession() registers the session with MediaNotificationManager so it
+        // starts observing player state and shows the notification automatically —
+        // no MediaController connection required.
+        addSession(session!!)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         val player = session?.player
-        // If nothing is playing when the user swipes away the app, stop the service.
-        // If music is playing, keep the foreground service running.
+        // Stop service (and music) when user dismisses the app while paused.
+        // Keep running if music is actively playing.
         if (player == null || !player.isPlaying) {
             player?.stop()
             stopSelf()
@@ -55,7 +59,8 @@ class OffmusicService : MediaSessionService() {
     }
 
     override fun onDestroy() {
-        session?.release()
+        // MediaSessionService.onDestroy() releases all sessions in getSessions().
+        // Clear our reference first; super handles the actual release.
         session = null
         super.onDestroy()
     }

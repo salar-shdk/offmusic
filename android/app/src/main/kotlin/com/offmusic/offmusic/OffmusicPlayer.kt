@@ -44,6 +44,13 @@ class OffmusicPlayer(private val context: Context) {
     var onSkipNext: (() -> Unit)? = null
     var onSkipPrev: (() -> Unit)? = null
 
+    // Current song metadata — persists across Flutter engine restarts so Dart
+    // can restore its state when the app is reopened while music is playing.
+    var currentVideoId: String = ""
+    var currentTitle: String = ""
+    var currentArtist: String = ""
+    var currentThumbnailUrl: String = ""
+
     private fun buildDataSourceFactory(): ResolvingDataSource.Factory {
         // OkHttpDataSource with Chrome UA — same as Kreate's OkHttpDataSource.Factory
         val okhttpFactory = OkHttpDataSource.Factory(okClient).setUserAgent(CHROME_UA)
@@ -129,6 +136,13 @@ class OffmusicPlayer(private val context: Context) {
         } else {
             videoId.toUri()               // video ID — resolver fetches & deobfuscates URL
         }
+        currentVideoId = videoId
+        currentTitle = title
+        currentArtist = artist
+        currentThumbnailUrl = thumbnailUrl
+        // Explicitly stop current playback before loading the new item to prevent
+        // the previous song from continuing while the new one is being prepared.
+        exoPlayer.stop()
         exoPlayer.setMediaItem(
             MediaItem.Builder()
                 .setMediaId(videoId)
@@ -229,12 +243,18 @@ class OffmusicPlayer(private val context: Context) {
     private fun emitState() {
         val dur = exoPlayer.duration.takeIf { it != C.TIME_UNSET } ?: 0L
         onStateChange?.invoke(mapOf(
-            "isPlaying"   to exoPlayer.isPlaying,
-            "isBuffering" to (exoPlayer.playbackState == Player.STATE_BUFFERING),
-            "isLoading"   to (exoPlayer.playbackState == Player.STATE_IDLE ||
-                              exoPlayer.playbackState == Player.STATE_BUFFERING),
-            "position"    to exoPlayer.currentPosition,
-            "duration"    to dur,
+            "isPlaying"    to exoPlayer.isPlaying,
+            "isBuffering"  to (exoPlayer.playbackState == Player.STATE_BUFFERING),
+            "isLoading"    to (exoPlayer.playbackState == Player.STATE_IDLE ||
+                               exoPlayer.playbackState == Player.STATE_BUFFERING),
+            "position"     to exoPlayer.currentPosition,
+            "duration"     to dur,
+            // Always include song metadata so Flutter can restore state when
+            // the app is reopened while music is playing in the background.
+            "videoId"      to currentVideoId,
+            "title"        to currentTitle,
+            "artist"       to currentArtist,
+            "thumbnailUrl" to currentThumbnailUrl,
         ))
     }
 

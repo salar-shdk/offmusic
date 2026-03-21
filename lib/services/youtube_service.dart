@@ -1,0 +1,731 @@
+import 'dart:convert';
+import 'dart:math';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+import '../models/song.dart';
+import '../models/album.dart';
+import '../models/artist.dart';
+
+/// MethodChannel matching StreamUrlChannel.NAME on the Android side.
+const _kStreamChannel = MethodChannel('com.offmusic.offmusic/stream');
+
+class SearchResults {
+  final List<Song> songs;
+  final List<Album> albums;
+  final List<Artist> artists;
+
+  const SearchResults({
+    required this.songs,
+    required this.albums,
+    required this.artists,
+  });
+}
+
+class YouTubeService {
+  final _yt = YoutubeExplode();
+  final _httpClient = http.Client();
+
+  // Session cookies fetched on first request (Kreate's Store.kt approach)
+  final Map<String, String> _cookies = {};
+  bool _cookiesInitialized = false;
+
+  // ── Client configs (matching Kreate / NewPipeExtractor) ─────────────────────
+
+  // ANDROID client — primary, used by Kreate via NewPipeExtractor
+  static const _kAndroidClientName = 'ANDROID';
+  static const _kAndroidClientVersion = '21.03.36';
+  static const _kAndroidClientNameId = '3';
+
+  // IOS client — Kreate's first fallback
+  static const _kIosClientName = 'IOS';
+  static const _kIosClientVersion = '21.03.2';
+  static const _kIosClientNameId = '5';
+  static const _kIosDeviceModel = 'iPhone16,2';
+  static const _kIosOsVersion = '18.7.2.22H124';
+
+  // ANDROID_MUSIC client — hits music.youtube.com
+  static const _kAndroidMusicClientName = 'ANDROID_MUSIC';
+  static const _kAndroidMusicClientVersion = '6.33.52';
+  static const _kAndroidMusicClientNameId = '21';
+
+  // ── Endpoints ────────────────────────────────────────────────────────────────
+
+  // googleapis endpoint — Kreate's primary player endpoint (no key needed)
+  static const _kPlayerUrl =
+      'https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false';
+
+  // music.youtube.com endpoint — ANDROID_MUSIC fallback
+  static const _kMusicPlayerUrl =
+      'https://music.youtube.com/youtubei/v1/player'
+      '?key=AIzaSyAOghZGza2MQSZkY_zfZ370N-PUdXEo8AI';
+
+  // YouTube Music search endpoint
+  static const _kMusicSearchUrl =
+      'https://music.youtube.com/youtubei/v1/search'
+      '?key=AIzaSyC9XL3ZjWddXya6X74dJoCTL-KLET5f07I';
+  static const _kMusicClientVersion = '1.20240101.01.00';
+  static const _kSongsFilterParam   = 'EgWKAQIIAWoKEAQQAxAJEAUQCg==';
+  static const _kAlbumsFilterParam  = 'EgWKAQIYAWoKEAQQAxAJEAUQCg==';
+  static const _kArtistsFilterParam = 'EgWKAQIgAWoKEAQQAxAJEAUQCg==';
+
+  // ── Session bootstrapping (Kreate's Store.kt) ────────────────────────────────
+
+  /// Fetches initial YouTube cookies so subsequent requests are treated as
+  /// a normal browser/app session. Kreate does the same via Store.kt.
+  Future<void> _ensureCookies() async {
+    if (_cookiesInitialized) return;
+    _cookiesInitialized = true;
+    try {
+      final response = await _httpClient.get(
+        Uri.parse(
+          'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+          '&bpctr=9999999999&has_verified=1',
+        ),
+        headers: {
+          'Cookie': 'PREF=hl=en&tz=UTC; SOCS=CAI',
+          'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+              'AppleWebKit/537.36 (KHTML, like Gecko) '
+              'Chrome/115.0.0.0 Safari/537.36',
+          'Sec-Fetch-Mode': 'navigate',
+        },
+      ).timeout(const Duration(seconds: 8));
+
+      final setCookie = response.headers['set-cookie'] ?? '';
+      for (final part in setCookie.split(RegExp(r',(?=[^ ])'))) {
+        final kv = part.split(';').first.trim();
+        final idx = kv.indexOf('=');
+        if (idx > 0) {
+          _cookies[kv.substring(0, idx).trim()] =
+              kv.substring(idx + 1).trim();
+        }
+      }
+    } catch (_) {}
+  }
+
+  String _buildCookieHeader() {
+    if (_cookies.isEmpty) return 'PREF=hl=en&tz=UTC; SOCS=CAI';
+    return _cookies.entries.map((e) => '${e.key}=${e.value}').join('; ');
+  }
+
+  // ── CPN generation ────────────────────────────────────────────────────────────
+
+  /// Generates a content playback nonce (cpn) — required by Kreate's player.
+  static String _generateCpn() {
+    const chars =
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    final rng = Random.secure();
+    return List.generate(16, (_) => chars[rng.nextInt(chars.length)]).join();
+  }
+
+  // ── Search ────────────────────────────────────────────────────────────────────
+
+  Future<SearchResults> search(String query) async {
+    final results = await Future.wait([
+      _searchMusicSongs(query),
+      _searchAlbumsViaMusicApi(query),
+      _searchMusicArtists(query),
+    ]);
+    return SearchResults(
+      songs: results[0] as List<Song>,
+      albums: results[1] as List<Album>,
+      artists: results[2] as List<Artist>,
+    );
+  }
+
+  Future<List<Song>> searchSongs(String query) => _searchMusicSongs(query);
+
+  /// Searches YouTube Music for songs using the InnerTube WEB_REMIX client.
+  Future<List<Song>> _searchMusicSongs(String query) async {
+    try {
+      final data = await _musicSearch(query, _kSongsFilterParam);
+      if (data == null) return [];
+      final songs = <Song>[];
+      for (final item in _musicShelfItems(data)) {
+        final song = _parseMusicSong(item);
+        if (song != null) songs.add(song);
+      }
+      return songs;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Searches YouTube Music for artists using the InnerTube WEB_REMIX client.
+  Future<List<Artist>> _searchMusicArtists(String query) async {
+    try {
+      final data = await _musicSearch(query, _kArtistsFilterParam);
+      if (data == null) return [];
+      final artists = <Artist>[];
+      for (final item in _musicShelfItems(data)) {
+        final artist = _parseMusicArtist(item);
+        if (artist != null) artists.add(artist);
+      }
+      return artists;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Sends a YouTube Music InnerTube search request and returns the decoded JSON.
+  Future<Map<String, dynamic>?> _musicSearch(
+      String query, String filterParam) async {
+    final response = await _httpClient
+        .post(
+          Uri.parse(_kMusicSearchUrl),
+          headers: const {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0',
+            'X-YouTube-Client-Name': '67',
+            'X-YouTube-Client-Version': _kMusicClientVersion,
+            'Origin': 'https://music.youtube.com',
+            'Referer': 'https://music.youtube.com/',
+          },
+          body: jsonEncode({
+            'context': {
+              'client': {
+                'clientName': 'WEB_REMIX',
+                'clientVersion': _kMusicClientVersion,
+                'hl': 'en',
+                'gl': 'US',
+              },
+            },
+            'query': query,
+            'params': filterParam,
+          }),
+        )
+        .timeout(const Duration(seconds: 10));
+    if (response.statusCode != 200) return null;
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  /// Extracts the list of raw items from the first musicShelfRenderer in results.
+  List<dynamic> _musicShelfItems(Map<String, dynamic> data) {
+    final tabs = (data['contents'] as Map?)
+        ?['tabbedSearchResultsRenderer']?['tabs'] as List?;
+    final sections = tabs?.firstOrNull?['tabRenderer']?['content']
+        ?['sectionListRenderer']?['contents'] as List?;
+    if (sections == null) return [];
+    for (final section in sections) {
+      final shelf = section['musicShelfRenderer'] as Map?;
+      if (shelf != null) {
+        return shelf['contents'] as List? ?? [];
+      }
+    }
+    return [];
+  }
+
+  Song? _parseMusicSong(dynamic raw) {
+    final item = (raw as Map?)
+        ?['musicResponsiveListItemRenderer'] as Map<String, dynamic>?;
+    if (item == null) return null;
+
+    // Video ID — try overlay path first, then title run navigationEndpoint.
+    final videoId = (_dig(item, [
+          'overlay', 'musicItemThumbnailOverlayRenderer', 'content',
+          'musicPlayButtonRenderer', 'playNavigationEndpoint',
+          'watchEndpoint', 'videoId',
+        ]) ??
+        _dig(item, [
+          'flexColumns', 0, 'musicResponsiveListItemFlexColumnRenderer',
+          'text', 'runs', 0, 'navigationEndpoint', 'watchEndpoint', 'videoId',
+        ])) as String?;
+    if (videoId == null) return null;
+
+    final cols = item['flexColumns'] as List?;
+    final title = _dig(cols, [
+      0, 'musicResponsiveListItemFlexColumnRenderer', 'text', 'runs', 0, 'text',
+    ]) as String?;
+    final artist = _dig(cols, [
+      1, 'musicResponsiveListItemFlexColumnRenderer', 'text', 'runs', 0, 'text',
+    ]) as String?;
+    final thumbs = _dig(item, [
+      'thumbnail', 'musicThumbnailRenderer', 'thumbnail', 'thumbnails',
+    ]) as List?;
+    final thumb = thumbs?.isNotEmpty == true
+        ? thumbs!.last['url'] as String?
+        : null;
+
+    if (title == null) return null;
+    return Song(
+      id: videoId,
+      title: title,
+      artist: artist ?? '',
+      artistId: '',
+      album: '',
+      albumId: '',
+      thumbnailUrl: thumb ?? '',
+      durationSeconds: 0,
+    );
+  }
+
+  Artist? _parseMusicArtist(dynamic raw) {
+    final item = (raw as Map?)
+        ?['musicResponsiveListItemRenderer'] as Map<String, dynamic>?;
+    if (item == null) return null;
+
+    final browseId = _dig(item, [
+      'navigationEndpoint', 'browseEndpoint', 'browseId',
+    ]) as String?;
+    final cols = item['flexColumns'] as List?;
+    final name = _dig(cols, [
+      0, 'musicResponsiveListItemFlexColumnRenderer', 'text', 'runs', 0, 'text',
+    ]) as String?;
+    if (name == null) return null;
+
+    final thumbs = _dig(item, [
+      'thumbnail', 'musicThumbnailRenderer', 'thumbnail', 'thumbnails',
+    ]) as List?;
+    final thumb = thumbs?.isNotEmpty == true
+        ? thumbs!.last['url'] as String?
+        : null;
+
+    return Artist(
+      id: browseId ?? name,
+      name: name,
+      thumbnailUrl: thumb ?? '',
+    );
+  }
+
+  /// Safely traverses a nested structure via a list of keys/indices.
+  dynamic _dig(dynamic obj, List<dynamic> keys) {
+    dynamic cur = obj;
+    for (final key in keys) {
+      if (cur == null) return null;
+      if (key is int) {
+        cur = (cur is List && cur.length > key) ? cur[key] : null;
+      } else {
+        cur = (cur is Map) ? cur[key] : null;
+      }
+    }
+    return cur;
+  }
+
+  /// YouTube Music album search via InnerTube (WEB_REMIX client).
+  Future<List<Album>> _searchAlbumsViaMusicApi(String query) async {
+    try {
+      final data = await _musicSearch(query, _kAlbumsFilterParam);
+      if (data == null) return [];
+      final albums = <Album>[];
+
+      final tabs = (data['contents'] as Map<String, dynamic>?)
+          ?['tabbedSearchResultsRenderer']?['tabs'] as List<dynamic>?;
+      final sectionContents = tabs
+          ?.firstOrNull?['tabRenderer']?['content']
+          ?['sectionListRenderer']?['contents'] as List<dynamic>?;
+      if (sectionContents == null) return [];
+
+      for (final section in sectionContents) {
+        final shelf =
+            section['musicShelfRenderer'] as Map<String, dynamic>?;
+        if (shelf == null) continue;
+
+        for (final item in (shelf['contents'] as List<dynamic>? ?? [])) {
+          final renderer =
+              item['musicTwoRowItemRenderer'] as Map<String, dynamic>?;
+          if (renderer == null) continue;
+
+          final title = (renderer['title']?['runs'] as List<dynamic>?)
+              ?.firstOrNull?['text'] as String?;
+          final browseId = renderer['navigationEndpoint']
+              ?['browseEndpoint']?['browseId'] as String?;
+          if (title == null || browseId == null) continue;
+
+          final subtitleRuns =
+              renderer['subtitle']?['runs'] as List<dynamic>?;
+          final artist = subtitleRuns
+                  ?.map((r) => r['text'] as String? ?? '')
+                  .join('') ??
+              '';
+
+          final thumbList = (renderer['thumbnailRenderer']
+                      ?['musicThumbnailRenderer']?['thumbnail']
+                  ?['thumbnails'] as List<dynamic>?) ??
+              [];
+          final thumbUrl = thumbList.isNotEmpty
+              ? (thumbList.last['url'] as String? ?? '')
+              : '';
+
+          int year = DateTime.now().year;
+          if (subtitleRuns != null) {
+            for (final run in subtitleRuns) {
+              final parsed = int.tryParse((run['text'] as String? ?? '').trim());
+              if (parsed != null &&
+                  parsed > 1900 &&
+                  parsed <= DateTime.now().year) {
+                year = parsed;
+                break;
+              }
+            }
+          }
+
+          albums.add(Album(
+            id: browseId,
+            title: title,
+            artist: artist,
+            artistId: '',
+            thumbnailUrl: thumbUrl,
+            year: year,
+            songIds: [],
+          ));
+        }
+      }
+
+      return albums;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  // ── Stream URL (Kreate's multi-client approach) ───────────────────────────────
+
+  /// Returns a direct audio stream URL.
+  /// Tries in order:
+  ///   1. ANDROID client → youtubei.googleapis.com  (Kreate primary)
+  ///   2. IOS client → youtubei.googleapis.com       (Kreate fallback)
+  ///   3. ANDROID_MUSIC client → music.youtube.com   (music-specific fallback)
+  ///   4. youtube_explode_dart                        (last resort)
+  Future<String?> getStreamUrl(String videoId) async {
+    debugPrint('[YT] getStreamUrl($videoId)');
+
+    // 1. Native MethodChannel → NewPipeExtractor (same as Kreate)
+    //    Handles n-param deobfuscation via YoutubeJavaScriptPlayerManager.
+    //    This is the primary path and mirrors exactly what Kreate does.
+    debugPrint('[YT] trying native NewPipeExtractor channel');
+    try {
+      final url = await _kStreamChannel.invokeMethod<String>(
+        'getStreamUrl',
+        {'videoId': videoId},
+      ).timeout(const Duration(seconds: 30));
+      if (url != null && url.isNotEmpty) {
+        debugPrint('[YT] native channel succeeded');
+        return url;
+      }
+    } catch (e) {
+      debugPrint('[YT] native channel error: $e');
+    }
+
+    // 2. youtube_explode_dart — pure-Dart n-param deobfuscation fallback
+    debugPrint('[YT] trying youtube_explode_dart');
+    try {
+      final manifest = await _yt.videos.streamsClient
+          .getManifest(videoId)
+          .timeout(const Duration(seconds: 20));
+      final audioOnly = manifest.audioOnly;
+      if (audioOnly.isNotEmpty) {
+        final streams = audioOnly.toList();
+        final mp4 = streams
+            .where((s) => s.codec.mimeType.contains('mp4'))
+            .toList();
+        final candidates = mp4.isNotEmpty ? mp4 : streams;
+        candidates.sort((a, b) =>
+            b.bitrate.bitsPerSecond.compareTo(a.bitrate.bitsPerSecond));
+        final chosen = candidates.first;
+        debugPrint(
+          '[YT] youtube_explode_dart succeeded: '
+          'mime=${chosen.codec.mimeType} bitrate=${chosen.bitrate}',
+        );
+        return chosen.url.toString();
+      }
+    } catch (e) {
+      debugPrint('[YT] youtube_explode_dart error: $e');
+    }
+
+    // 3–5. InnerTube clients — last resort (no n-param deobfuscation)
+    await _ensureCookies();
+
+    debugPrint('[YT] trying ANDROID InnerTube client');
+    final androidUrl = await _tryAndroidClient(videoId);
+    if (androidUrl != null) {
+      debugPrint('[YT] ANDROID client succeeded');
+      return androidUrl;
+    }
+
+    debugPrint('[YT] trying IOS InnerTube client');
+    final iosUrl = await _tryIosClient(videoId);
+    if (iosUrl != null) {
+      debugPrint('[YT] IOS client succeeded');
+      return iosUrl;
+    }
+
+    debugPrint('[YT] trying ANDROID_MUSIC InnerTube client');
+    final musicUrl = await _tryAndroidMusicClient(videoId);
+    if (musicUrl != null) {
+      debugPrint('[YT] ANDROID_MUSIC client succeeded');
+      return musicUrl;
+    }
+
+    debugPrint('[YT] all clients failed for $videoId');
+    return null;
+  }
+
+  /// ANDROID client — matches Kreate's primary path via NewPipeExtractor.
+  Future<String?> _tryAndroidClient(String videoId) async {
+    try {
+      debugPrint('[YT] ANDROID: sending request');
+      final cpn = _generateCpn();
+      final response = await _httpClient
+          .post(
+            Uri.parse(_kPlayerUrl),
+            headers: {
+              'Content-Type': 'application/json',
+              'Cookie': _buildCookieHeader(),
+              'User-Agent':
+                  'com.google.android.youtube/$_kAndroidClientVersion '
+                  '(Linux; U; Android 11; en_US) gzip',
+              'X-YouTube-Client-Name': _kAndroidClientNameId,
+              'X-YouTube-Client-Version': _kAndroidClientVersion,
+            },
+            body: jsonEncode({
+              'videoId': videoId,
+              'cpn': cpn,
+              'contentCheckOk': true,
+              'racyCheckOk': true,
+              'context': {
+                'client': {
+                  'clientName': _kAndroidClientName,
+                  'clientVersion': _kAndroidClientVersion,
+                  'platform': 'MOBILE',
+                  'clientScreen': 'WATCH',
+                  'osName': 'Android',
+                  'osVersion': '11',
+                  'androidSdkVersion': 30,
+                  'hl': 'en',
+                  'gl': 'US',
+                  'utcOffsetMinutes': 0,
+                },
+                'request': {
+                  'internalExperimentFlags': [],
+                  'useSsl': true,
+                },
+                'user': {'lockedSafetyMode': false},
+              },
+            }),
+          )
+          .timeout(const Duration(seconds: 12));
+
+      return _extractAudioUrl(response);
+    } catch (e) {
+      debugPrint('[YT] ANDROID client error: $e');
+      return null;
+    }
+  }
+
+  /// IOS client — Kreate's IOS fallback path.
+  Future<String?> _tryIosClient(String videoId) async {
+    try {
+      final cpn = _generateCpn();
+      final response = await _httpClient
+          .post(
+            Uri.parse(_kPlayerUrl),
+            headers: {
+              'Content-Type': 'application/json',
+              'Cookie': _buildCookieHeader(),
+              'User-Agent':
+                  'com.google.ios.youtube/$_kIosClientVersion'
+                  '($_kIosDeviceModel; U; CPU iOS 18_7_2 like Mac OS X; en_US)',
+              'X-YouTube-Client-Name': _kIosClientNameId,
+              'X-YouTube-Client-Version': _kIosClientVersion,
+            },
+            body: jsonEncode({
+              'videoId': videoId,
+              'cpn': cpn,
+              'contentCheckOk': true,
+              'racyCheckOk': true,
+              'context': {
+                'client': {
+                  'clientName': _kIosClientName,
+                  'clientVersion': _kIosClientVersion,
+                  'platform': 'MOBILE',
+                  'clientScreen': 'WATCH',
+                  'deviceMake': 'Apple',
+                  'deviceModel': _kIosDeviceModel,
+                  'osName': 'iOS',
+                  'osVersion': _kIosOsVersion,
+                  'hl': 'en',
+                  'gl': 'US',
+                  'utcOffsetMinutes': 0,
+                },
+                'request': {
+                  'internalExperimentFlags': [],
+                  'useSsl': true,
+                },
+                'user': {'lockedSafetyMode': false},
+              },
+            }),
+          )
+          .timeout(const Duration(seconds: 12));
+
+      return _extractAudioUrl(response);
+    } catch (e) {
+      debugPrint('[YT] IOS client error: $e');
+      return null;
+    }
+  }
+
+  /// ANDROID_MUSIC client — hits music.youtube.com player endpoint.
+  Future<String?> _tryAndroidMusicClient(String videoId) async {
+    try {
+      final cpn = _generateCpn();
+      final response = await _httpClient
+          .post(
+            Uri.parse(_kMusicPlayerUrl),
+            headers: {
+              'Content-Type': 'application/json',
+              'Cookie': _buildCookieHeader(),
+              'User-Agent':
+                  'com.google.android.apps.youtube.music/$_kAndroidMusicClientVersion '
+                  '(Linux; U; Android 11; en_US) gzip',
+              'X-YouTube-Client-Name': _kAndroidMusicClientNameId,
+              'X-YouTube-Client-Version': _kAndroidMusicClientVersion,
+              'X-Goog-Api-Key':
+                  'AIzaSyAOghZGza2MQSZkY_zfZ370N-PUdXEo8AI',
+              'X-Goog-FieldMask':
+                  'playabilityStatus.status,'
+                  'streamingData.adaptiveFormats,'
+                  'videoDetails.videoId',
+            },
+            body: jsonEncode({
+              'videoId': videoId,
+              'cpn': cpn,
+              'contentCheckOk': true,
+              'racyCheckOk': true,
+              'context': {
+                'client': {
+                  'clientName': _kAndroidMusicClientName,
+                  'clientVersion': _kAndroidMusicClientVersion,
+                  'androidSdkVersion': 30,
+                  'hl': 'en',
+                  'gl': 'US',
+                  'utcOffsetMinutes': 0,
+                },
+                'request': {
+                  'internalExperimentFlags': [],
+                  'useSsl': true,
+                },
+                'user': {'lockedSafetyMode': false},
+              },
+            }),
+          )
+          .timeout(const Duration(seconds: 12));
+
+      return _extractAudioUrl(response);
+    } catch (e) {
+      debugPrint('[YT] ANDROID_MUSIC client error: $e');
+      return null;
+    }
+  }
+
+  /// Parses a player API response and returns the best audio URL.
+  /// Prefers audio/mp4 (AAC) over audio/webm (Opus) for Android compatibility.
+  /// Only returns direct `url` fields — does NOT handle signatureCipher.
+  String? _extractAudioUrl(http.Response response) {
+    if (response.statusCode != 200) {
+      debugPrint('[YT] player HTTP ${response.statusCode}');
+      return null;
+    }
+
+    final Map<String, dynamic> data;
+    try {
+      data = jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (e) {
+      debugPrint('[YT] JSON parse error: $e');
+      return null;
+    }
+
+    final status =
+        (data['playabilityStatus'] as Map<String, dynamic>?)?['status'];
+    if (status != 'OK') {
+      final reason = (data['playabilityStatus'] as Map<String, dynamic>?)
+          ?['reason'];
+      debugPrint('[YT] playabilityStatus=$status reason=$reason');
+      return null;
+    }
+
+    final allFormats =
+        (data['streamingData']?['adaptiveFormats'] as List<dynamic>?)
+            ?.whereType<Map<String, dynamic>>()
+            .where((f) {
+              final mime = f['mimeType'] as String? ?? '';
+              final url = f['url'] as String?;
+              return mime.startsWith('audio/') && url != null && url.isNotEmpty;
+            })
+            .toList();
+
+    if (allFormats == null || allFormats.isEmpty) {
+      debugPrint('[YT] no direct-URL audio formats found');
+      return null;
+    }
+
+    // Prefer audio/mp4 (AAC) — universally supported on Android.
+    // Fall back to audio/webm (Opus) if no mp4 formats exist.
+    final mp4 = allFormats
+        .where((f) => (f['mimeType'] as String).startsWith('audio/mp4'))
+        .toList();
+    final candidates = mp4.isNotEmpty ? mp4 : allFormats;
+
+    // Within the chosen group, pick highest bitrate.
+    candidates.sort((a, b) => ((b['bitrate'] as num?) ?? 0)
+        .compareTo((a['bitrate'] as num?) ?? 0));
+
+    final chosen = candidates.first;
+    debugPrint(
+      '[YT] selected format mime=${chosen['mimeType']} '
+      'itag=${chosen['itag']} bitrate=${chosen['bitrate']}',
+    );
+    return chosen['url'] as String;
+  }
+
+  // ── Video/playlist helpers ────────────────────────────────────────────────────
+
+  Future<Song?> getVideoDetails(String videoId) async {
+    try {
+      final video = await _yt.videos.get(videoId);
+      return _videoToSong(video);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<List<Song>> getPlaylistSongs(String playlistId) async {
+    final songs = <Song>[];
+    try {
+      await for (final video in _yt.playlists.getVideos(playlistId)) {
+        songs.add(_videoToSong(video));
+        if (songs.length >= 50) break;
+      }
+    } catch (_) {}
+    return songs;
+  }
+
+  Future<List<Song>> getArtistSongs(String channelId) async {
+    final songs = <Song>[];
+    try {
+      await for (final video in _yt.channels.getUploads(channelId)) {
+        songs.add(_videoToSong(video));
+        if (songs.length >= 30) break;
+      }
+    } catch (_) {}
+    return songs;
+  }
+
+  Song _videoToSong(Video video) {
+    return Song(
+      id: video.id.value,
+      title: video.title,
+      artist: video.author,
+      artistId: video.channelId.value,
+      album: '',
+      albumId: '',
+      thumbnailUrl: video.thumbnails.highResUrl,
+      durationSeconds: video.duration?.inSeconds ?? 0,
+    );
+  }
+
+  void dispose() {
+    _yt.close();
+    _httpClient.close();
+  }
+}

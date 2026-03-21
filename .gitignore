@@ -1,0 +1,61 @@
+# ── Dart / Flutter ────────────────────────────────────────────────────────────
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+**/doc/api/
+
+# Generated files — Hive adapters (*.g.dart) are intentionally committed
+# so CI doesn't need build_runner to build the project.
+
+# ── Android ───────────────────────────────────────────────────────────────────
+# Machine-specific local SDK / Flutter SDK paths
+android/local.properties
+
+# Signing config — never commit private keys
+android/key.properties
+*.keystore
+*.jks
+
+# Gradle build outputs
+android/.gradle/
+android/app/build/
+android/build/
+/android/app/debug/
+/android/app/profile/
+/android/app/release/
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.atom/
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# ── Miscellaneous ─────────────────────────────────────────────────────────────
+*.class
+*.log
+*.pyc
+*.swp
+
+# ── Dev artefacts not meant for the repo ──────────────────────────────────────
+logs/
+test_stream.py
+
+# ── Claude Code configuration (personal / machine-specific) ───────────────────
+.claude/
+
+# ── Symbolication / obfuscation maps ──────────────────────────────────────────
+app.*.symbols
+app.*.map.json

@@ -1,4 +1,15 @@
-# offmusic
+<p align="center">
+  <img width="300" height="300" alt="off_music_icon" src="https://github.com/user-attachments/assets/fb71d5b6-71ac-4e72-9950-ab05ef5f6465" />
+</p>
+<h1 align="center">offmusic</h1>
+
+<p align="center">
+  <a href="https://buymeacoffee.com/salar_shdk">
+    <img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-☕-yellow" alt="Buy Me a Coffee">
+  </a>
+  <img src="https://img.shields.io/badge/version-1.0.0-blue" alt="Version">
+</p>
+
 
 A free, open-source music streaming app for Android built with Flutter. Stream any song, build your library, and listen offline — no account required.
 
@@ -15,8 +26,14 @@ A free, open-source music streaming app for Android built with Flutter. Stream a
 - **Background playback** — media notification with controls; resumes seamlessly when you reopen the app
 
 ## Screenshots
-
-_Coming soon_
+<img src="https://github.com/user-attachments/assets/e7282e03-e907-4b67-b0fe-2d367be12a6a" alt="photo_1" width="228" height="640">
+<img src="https://github.com/user-attachments/assets/78302a04-6711-4369-a3fa-64af6765614a" alt="photo_2" width="228" height="640">
+<img src="https://github.com/user-attachments/assets/a8255f57-76af-45e5-b76d-284957a80188" alt="photo_3" width="228" height="640">
+<img src="https://github.com/user-attachments/assets/c93599e5-9833-49db-a709-91de92b1256e" alt="photo_4" width="228" height="640">
+<img src="https://github.com/user-attachments/assets/ae4e4811-acd5-49d0-a50d-ca5c863dcb03" alt="photo_5" width="228" height="640">
+<img src="https://github.com/user-attachments/assets/8467f1cf-c7e0-49a0-97a6-bad2682282a7" alt="photo_6" width="228" height="640">
+<img src="https://github.com/user-attachments/assets/e1fd22dc-ccc0-412a-bb5d-a29a9a40e363" alt="photo_7" width="228" height="640">
+<img src="https://github.com/user-attachments/assets/b91e5eb7-2516-425c-b3f2-4aaed2a2719d" alt="photo_8" width="228" height="640">
 
 ## Tech Stack
 
@@ -83,5 +100,3 @@ MIT — see [LICENSE](LICENSE)
 ---
 
 Developed by [Amirsalar Darvishpour](https://github.com/salar-shdk)
-
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-☕-yellow)](https://buymeacoffee.com/salar_shdk)

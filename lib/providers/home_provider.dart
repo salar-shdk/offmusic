@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/song.dart';
 import '../services/audio_service.dart';
@@ -62,6 +63,43 @@ class HomeProvider extends ChangeNotifier {
     _recommendedSongs = merged;
     _recommendedLoading = false;
     notifyListeners();
+    unawaited(_audioService.setAutoQuickPicks(_recommendedSongs));
+    unawaited(_loadAutoCategories());
+  }
+
+  static const _kAutoCategories = [
+    ('pop_hits',       'Pop Hits'),
+    ('hip_hop',        'Hip-Hop'),
+    ('rock_classics',  'Rock'),
+    ('electronic',     'Electronic'),
+    ('rnb_soul',       'R&B / Soul'),
+  ];
+
+  Future<void> _loadAutoCategories() async {
+    final results = await Future.wait(
+      _kAutoCategories.map((cat) async {
+        try {
+          final result = await _homeService.getCategorySongs(cat.$1.replaceAll('_', ' '));
+          if (result.songs.isNotEmpty) {
+            return <String, dynamic>{
+              'id': cat.$1,
+              'name': cat.$2,
+              'songs': result.songs.take(20).map((s) => {
+                'id': s.id,
+                'title': s.title,
+                'artist': s.artist,
+                'thumbnailUrl': s.thumbnailUrl,
+              }).toList(),
+            };
+          }
+        } catch (_) {}
+        return null;
+      }),
+    );
+    final categories = results.whereType<Map<String, dynamic>>().toList();
+    if (categories.isNotEmpty) {
+      unawaited(_audioService.setAutoCategories(categories));
+    }
   }
 
   // ── Quick Picks: explicit radio start ─────────────────────────────────────

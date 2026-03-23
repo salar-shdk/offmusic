@@ -20,6 +20,7 @@ const _kAutoDeleteKey = 'auto_delete_days';
 class LibraryProvider extends ChangeNotifier {
   final DatabaseService _db;
   final CacheService _cache;
+  final AudioPlayerService _audioService;
   StreamSubscription? _songCachedSub;
   int? _autoDeleteDays; // null = never
 
@@ -31,9 +32,9 @@ class LibraryProvider extends ChangeNotifier {
 
   int? get autoDeleteDays => _autoDeleteDays;
 
-  LibraryProvider(this._db, this._cache, AudioPlayerService audioService) {
+  LibraryProvider(this._db, this._cache, this._audioService) {
     _refresh();
-    _songCachedSub = audioService.songCachedStream.listen((_) => _refresh());
+    _songCachedSub = _audioService.songCachedStream.listen((_) => _refresh());
     _loadPrefsAndCleanup();
   }
 
@@ -79,6 +80,28 @@ class LibraryProvider extends ChangeNotifier {
     _playlists = _db.getAllPlaylists();
     _cachedSongs = _db.getCachedSongs();
     notifyListeners();
+    _pushAutoData();
+  }
+
+  void _pushAutoData() {
+    unawaited(_audioService.setAutoLikedSongs(_likedSongs));
+    final playlistData = _playlists.map((pl) {
+      final songs = pl.songIds
+          .map((id) => _db.getSong(id))
+          .whereType<Song>()
+          .toList();
+      return <String, dynamic>{
+        'id': pl.id,
+        'name': pl.name,
+        'songs': songs.take(100).map((s) => {
+          'id': s.id,
+          'title': s.title,
+          'artist': s.artist,
+          'thumbnailUrl': s.thumbnailUrl,
+        }).toList(),
+      };
+    }).toList();
+    unawaited(_audioService.setAutoPlaylists(playlistData));
   }
 
   bool isSongLiked(String id) => _db.getSong(id)?.isLiked ?? false;

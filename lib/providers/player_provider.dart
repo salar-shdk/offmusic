@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/song.dart';
 import '../models/lyrics.dart';
@@ -83,9 +84,16 @@ class PlayerProvider extends ChangeNotifier {
     _lyrics = null;
     _lyricsLoading = true;
     notifyListeners();
+    // Clear Auto lyrics immediately so stale lyrics from the previous song
+    // don't linger on the Android Auto player screen.
+    unawaited(_audioService.setAutoLyrics([]));
     _lyrics = await _lyricsService.getLyrics(song.id, song.title, song.artist);
     _lyricsLoading = false;
     notifyListeners();
+    // Only push synced lyrics — Auto subtitle needs timestamps to scroll correctly.
+    if (_lyrics != null && _lyrics!.isSynced && !_lyrics!.isEmpty) {
+      unawaited(_audioService.setAutoLyrics(_lyrics!.lines));
+    }
   }
 
   bool get isSongLiked => currentSong != null &&

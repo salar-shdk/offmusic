@@ -8,6 +8,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.core.net.toUri
 import java.io.File
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
@@ -79,6 +80,13 @@ class OffmusicPlayer(private val context: Context) {
 
     val exoPlayer: ExoPlayer = ExoPlayer.Builder(context)
         .setMediaSourceFactory(DefaultMediaSourceFactory(buildDataSourceFactory()))
+        .setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                .build(),
+            /* handleAudioFocus= */ true,
+        )
         .build()
         .also { player ->
             player.addListener(object : Player.Listener {
@@ -90,6 +98,25 @@ class OffmusicPlayer(private val context: Context) {
                     reason: Int,
                 ) = emitState()
                 override fun onPlayerError(error: PlaybackException) = emitError(error)
+
+                /**
+                 * Sync currentVideoId/title/artist when Android Auto (or any
+                 * external controller) switches the media item without going
+                 * through OffmusicPlayer.play(). This ensures Flutter's UI
+                 * always reflects what's actually playing natively.
+                 */
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    val item = mediaItem ?: return
+                    // Strip the "song_" prefix that the Auto browse tree adds.
+                    val newId = item.mediaId.removePrefix(OffmusicService.PREFIX_SONG)
+                    if (newId.isBlank() || newId == currentVideoId) return
+                    currentVideoId     = newId
+                    currentTitle       = item.mediaMetadata.title?.toString() ?: newId
+                    currentArtist      = item.mediaMetadata.artist?.toString() ?: ""
+                    currentThumbnailUrl = item.mediaMetadata.artworkUri?.toString() ?: ""
+                    lastLyricIdx       = -2
+                    emitState()
+                }
             })
         }
 
@@ -108,10 +135,63 @@ class OffmusicPlayer(private val context: Context) {
         override fun seekToPrevious() { mainHandler.post { onSkipPrev?.invoke() } }
     }
 
+    // Tracks which lyric line is currently shown in ExoPlayer's subtitle field.
+    // -2 = not initialised, -1 = subtitle cleared (lyrics off or unavailable).
+    private var lastLyricIdx: Int = -2
+
+    /**
+     * Called by OffmusicService when the user toggles lyrics via the custom
+     * action button, so the next positionTicker tick forces a fresh update.
+     */
+    fun resetLyricTracking() = mainHandler.post { lastLyricIdx = -2 }
+
+    /**
+     * Update ExoPlayer's subtitle field with the current synced lyric line.
+     *
+     * IMPORTANT: replaceMediaItem is ONLY called when lyrics are visible and
+     * the line has actually changed. Never called when lyrics are off, so
+     * normal phone playback is never interrupted.
+     */
+    private fun updateLyricsSubtitle() {
+        val lines = AutoDataStore.lyricsWithTimestamps
+        if (!AutoDataStore.showAutoLyrics || lines.isEmpty()) {
+            // Just reset the index tracker — do NOT touch ExoPlayer.
+            lastLyricIdx = -1
+            return
+        }
+        val pos = exoPlayer.currentPosition
+        var idx = 0
+        for (i in lines.indices) {
+            if (lines[i].timestampMs <= pos) idx = i else break
+        }
+        if (idx == lastLyricIdx) return
+        lastLyricIdx = idx
+        setSubtitle(lines[idx].text)
+    }
+
+    /**
+     * Replaces the current MediaItem's subtitle metadata without changing the
+     * URI, so ExoPlayer does not reload the media source.
+     * Only call this when lyrics are actively displayed.
+     */
+    private fun setSubtitle(text: String) {
+        val i = exoPlayer.currentMediaItemIndex
+        if (i < 0) return
+        val item = exoPlayer.currentMediaItem ?: return
+        val updated = item.buildUpon()
+            .setMediaMetadata(item.mediaMetadata.buildUpon().setSubtitle(text).build())
+            .build()
+        exoPlayer.replaceMediaItem(i, updated)
+    }
+
+    /** Explicitly clears the subtitle (called once when lyrics are toggled off). */
+    fun clearSubtitle() = mainHandler.post { setSubtitle("") }
+
     // Periodic position ticker — emits state every 500 ms while the player exists.
     private val positionTicker = object : Runnable {
         override fun run() {
             emitState()
+            updateLyricsSubtitle()
             mainHandler.postDelayed(this, 500)
         }
     }
@@ -140,9 +220,7 @@ class OffmusicPlayer(private val context: Context) {
         currentTitle = title
         currentArtist = artist
         currentThumbnailUrl = thumbnailUrl
-        // Explicitly stop current playback before loading the new item to prevent
-        // the previous song from continuing while the new one is being prepared.
-        exoPlayer.stop()
+        lastLyricIdx = -2 // force lyric line re-evaluation on new song
         exoPlayer.setMediaItem(
             MediaItem.Builder()
                 .setMediaId(videoId)
@@ -159,6 +237,24 @@ class OffmusicPlayer(private val context: Context) {
         )
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
+    }
+
+    /**
+     * Sends the full collection queue to Flutter so its UI and queue logic
+     * reflect the same list that ExoPlayer is playing in Android Auto.
+     */
+    fun sendAutoQueue(songs: List<AutoDataStore.AutoSong>, startIndex: Int) {
+        val songsData = songs.map { s ->
+            mapOf("id" to s.id, "title" to s.title, "artist" to s.artist,
+                "thumbnailUrl" to s.thumbnailUrl)
+        }
+        mainHandler.post {
+            onStateChange?.invoke(mapOf(
+                "command"    to "autoQueue",
+                "songs"      to songsData,
+                "startIndex" to startIndex,
+            ))
+        }
     }
 
     fun pause()  = mainHandler.post { exoPlayer.pause() }

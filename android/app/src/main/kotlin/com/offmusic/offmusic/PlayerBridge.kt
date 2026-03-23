@@ -9,8 +9,8 @@ import io.flutter.plugin.common.MethodChannel
 
 /**
  * Bridges Flutter ↔ OffmusicPlayer via MethodChannel + EventChannel.
- * Starts [OffmusicService] (a MediaSessionService) so Media3 manages
- * the media notification automatically.
+ * Starts [OffmusicService] (a MediaLibraryService) so Media3 manages
+ * the media notification and Android Auto browse automatically.
  */
 class PlayerBridge(
     context: Context,
@@ -98,8 +98,79 @@ class PlayerBridge(
                         }.start()
                     }
                 }
+
+                // ── Android Auto browse data ───────────────────────────────
+                "auto_setQuickPicks" -> {
+                    AutoDataStore.quickPicks = parseAutoSongs(call.argument("songs"))
+                    notifyAutoChildren(OffmusicService.NODE_QUICK)
+                    result.success(null)
+                }
+                "auto_setLikedSongs" -> {
+                    AutoDataStore.likedSongs = parseAutoSongs(call.argument("songs"))
+                    notifyAutoChildren(OffmusicService.NODE_LIKED)
+                    result.success(null)
+                }
+                "auto_setPlaylists" -> {
+                    val raw = call.argument<List<Map<String, Any?>>>("playlists") ?: emptyList()
+                    AutoDataStore.playlists = raw.map { pl ->
+                        AutoDataStore.AutoPlaylist(
+                            id    = pl["id"]   as? String ?: "",
+                            name  = pl["name"] as? String ?: "",
+                            songs = parseAutoSongs(
+                                @Suppress("UNCHECKED_CAST")
+                                pl["songs"] as? List<Map<String, Any?>>
+                            ),
+                        )
+                    }
+                    notifyAutoChildren(OffmusicService.NODE_PLAYLISTS)
+                    result.success(null)
+                }
+                "auto_setLyrics" -> {
+                    val raw = call.argument<List<Map<String, Any?>>>("lines") ?: emptyList()
+                    AutoDataStore.lyricsWithTimestamps = raw.map { l ->
+                        AutoDataStore.LyricLine(
+                            timestampMs = (l["ms"] as? Number)?.toLong() ?: 0L,
+                            text        = l["text"] as? String ?: "",
+                        )
+                    }
+                    result.success(null)
+                }
+                "auto_setCategories" -> {
+                    val rawCats = call.argument<List<Map<String, Any?>>>("categories") ?: emptyList()
+                    AutoDataStore.categories = rawCats.map { c ->
+                        AutoDataStore.AutoCategory(
+                            id    = c["id"]   as? String ?: "",
+                            name  = c["name"] as? String ?: "",
+                            songs = parseAutoSongs(
+                                @Suppress("UNCHECKED_CAST")
+                                c["songs"] as? List<Map<String, Any?>>
+                            ),
+                        )
+                    }
+                    notifyAutoChildren(OffmusicService.NODE_HOME)
+                    result.success(null)
+                }
+
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    private fun parseAutoSongs(raw: List<Map<String, Any?>>?): List<AutoDataStore.AutoSong> =
+        raw?.map { m ->
+            AutoDataStore.AutoSong(
+                id           = m["id"]           as? String ?: "",
+                title        = m["title"]        as? String ?: "",
+                artist       = m["artist"]       as? String ?: "",
+                thumbnailUrl = m["thumbnailUrl"] as? String ?: "",
+            )
+        } ?: emptyList()
+
+    /** Push a child-changed notification to all connected Auto browsers. */
+    private fun notifyAutoChildren(parentId: String) {
+        val sess = OffmusicService.sharedSession ?: return
+        for (controller in sess.connectedControllers) {
+            sess.notifyChildrenChanged(controller, parentId, Int.MAX_VALUE, null)
         }
     }
 

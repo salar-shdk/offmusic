@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../models/song.dart';
+import '../models/lyrics.dart';
 import 'cache_service.dart';
 import 'database_service.dart';
 
@@ -103,10 +104,48 @@ class AudioPlayerService {
     if (raw is! Map) return;
     final map = Map<String, dynamic>.from(raw);
 
-    // Commands routed from notification buttons (next/prev)
+    // Commands routed from notification buttons (next/prev) and Android Auto
     final command = map['command'] as String?;
     if (command == 'skipNext') { unawaited(skipNext()); return; }
     if (command == 'skipPrev') { unawaited(skipPrevious()); return; }
+    if (command == 'autoQueue') {
+      // Android Auto expanded a collection (quick picks / liked / playlist /
+      // category) — sync Flutter's queue so the UI and skip logic are correct.
+      final rawSongs = map['songs'] as List?;
+      final startIndex = (map['startIndex'] as num?)?.toInt() ?? 0;
+      if (rawSongs != null && rawSongs.isNotEmpty) {
+        final queue = rawSongs
+            .map((s) {
+              final m = Map<String, dynamic>.from(s as Map);
+              final id = m['id'] as String? ?? '';
+              if (id.isEmpty) return null;
+              return _db.getSong(id) ??
+                  Song(
+                    id: id,
+                    title: m['title'] as String? ?? id,
+                    artist: m['artist'] as String? ?? '',
+                    artistId: '',
+                    album: '',
+                    albumId: '',
+                    thumbnailUrl: m['thumbnailUrl'] as String? ?? '',
+                    durationSeconds: 0,
+                  );
+            })
+            .whereType<Song>()
+            .toList();
+        if (queue.isNotEmpty) {
+          final idx = startIndex.clamp(0, queue.length - 1);
+          _updateState(_state.copyWith(
+            queue: queue,
+            queueIndex: idx,
+            currentSong: queue[idx],
+            isLoading: true,
+            clearError: true,
+          ));
+        }
+      }
+      return;
+    }
 
     final error = map['error'] as String?;
     if (error != null) {
@@ -120,14 +159,15 @@ class AudioPlayerService {
     final position = Duration(milliseconds: (map['position'] as num?)?.toInt() ?? 0);
     final duration = Duration(milliseconds: (map['duration'] as num?)?.toInt() ?? 0);
 
-    // If Flutter has no current song but Android reports one playing (e.g. the
-    // app was reopened while music was playing in the background), restore the
-    // current song from the native state so the UI reflects what's playing.
+    // Sync Flutter's current song with what's actually playing natively.
+    // This handles two cases:
+    //   1. App reopened while music was playing in the background.
+    //   2. Android Auto initiated playback of a song Flutter didn't request.
     final nativeVideoId = map['videoId'] as String?;
     Song? restoredSong;
-    if (_state.currentSong == null &&
-        nativeVideoId != null &&
-        nativeVideoId.isNotEmpty) {
+    if (nativeVideoId != null &&
+        nativeVideoId.isNotEmpty &&
+        _state.currentSong?.id != nativeVideoId) {
       restoredSong = _db.getSong(nativeVideoId);
       if (restoredSong == null) {
         // Build a minimal Song from the metadata in the event so the mini
@@ -143,7 +183,7 @@ class AudioPlayerService {
           durationSeconds: duration.inSeconds,
         );
       }
-      debugPrint('[Audio] restored current song from native state: $nativeVideoId');
+      debugPrint('[Audio] synced current song from native: $nativeVideoId');
     }
 
     _updateState(_state.copyWith(
@@ -326,6 +366,60 @@ class AudioPlayerService {
   void updateQueue(List<Song> newQueue) {
     _updateState(_state.copyWith(queue: newQueue));
   }
+
+  // ── Android Auto data push ─────────────────────────────────────────────
+
+  Future<void> setAutoQuickPicks(List<Song> songs) async {
+    try {
+      await _method.invokeMethod('auto_setQuickPicks', {
+        'songs': songs.take(50).map(_songToAutoMap).toList(),
+      });
+    } catch (_) {}
+  }
+
+  Future<void> setAutoLikedSongs(List<Song> songs) async {
+    try {
+      await _method.invokeMethod('auto_setLikedSongs', {
+        'songs': songs.take(50).map(_songToAutoMap).toList(),
+      });
+    } catch (_) {}
+  }
+
+  Future<void> setAutoPlaylists(List<Map<String, dynamic>> playlists) async {
+    try {
+      await _method.invokeMethod('auto_setPlaylists', {
+        'playlists': playlists.take(20).toList(),
+      });
+    } catch (_) {}
+  }
+
+  /// Send synced lyrics (with timestamps) to Android Auto for subtitle display.
+  /// For unsynced lyrics or when clearing, pass an empty list.
+  Future<void> setAutoLyrics(List<LyricLine> lines) async {
+    try {
+      await _method.invokeMethod('auto_setLyrics', {
+        'lines': lines.map((l) => {
+          'ms': l.timestamp.inMilliseconds,
+          'text': l.text,
+        }).toList(),
+      });
+    } catch (_) {}
+  }
+
+  Future<void> setAutoCategories(List<Map<String, dynamic>> categories) async {
+    try {
+      await _method.invokeMethod('auto_setCategories', {
+        'categories': categories.take(6).toList(),
+      });
+    } catch (_) {}
+  }
+
+  static Map<String, String> _songToAutoMap(Song song) => {
+    'id': song.id,
+    'title': song.title,
+    'artist': song.artist,
+    'thumbnailUrl': song.thumbnailUrl,
+  };
 
   Future<void> dispose() async {
     _stopPositionTimer();

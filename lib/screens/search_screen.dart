@@ -190,25 +190,63 @@ class _SearchScreenState extends State<SearchScreen>
   }
 }
 
-class _SongsTab extends StatelessWidget {
+class _SongsTab extends StatefulWidget {
   final List songs;
 
   const _SongsTab({required this.songs});
 
   @override
+  State<_SongsTab> createState() => _SongsTabState();
+}
+
+class _SongsTabState extends State<_SongsTab> {
+  final _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    final pos = _scrollController.position;
+    if (pos.pixels >= pos.maxScrollExtent - 300) {
+      context.read<SearchProvider>().loadMoreSongs();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final search = context.watch<SearchProvider>();
+    final songs = widget.songs;
+
     if (songs.isEmpty) {
       return const Center(child: Text('No songs found'));
     }
     return ListView.builder(
+      controller: _scrollController,
       padding: const EdgeInsets.only(bottom: 80),
-      itemCount: songs.length,
-      itemBuilder: (context, i) => SongTile(
-        song: songs[i],
-        queue: List.from(songs),
-        index: i,
-        onMoreTap: () => _showSongOptions(context, songs[i]),
-      ),
+      itemCount: songs.length + (search.isLoadingMore ? 1 : 0),
+      itemBuilder: (context, i) {
+        if (i == songs.length) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        return SongTile(
+          song: songs[i],
+          queue: List.from(songs),
+          index: i,
+          onMoreTap: () => _showSongOptions(context, songs[i]),
+        );
+      },
     );
   }
 

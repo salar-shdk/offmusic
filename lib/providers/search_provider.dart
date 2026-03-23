@@ -14,9 +14,11 @@ class SearchProvider extends ChangeNotifier {
   List<Album> _albums = [];
   List<Artist> _artists = [];
   bool _isLoading = false;
+  bool _isLoadingMore = false;
   String _lastQuery = '';
   String? _error;
   SearchTab _activeTab = SearchTab.songs;
+  String? _songsContinuation;
 
   // Debounce + cancellation
   Timer? _debounce;
@@ -28,6 +30,8 @@ class SearchProvider extends ChangeNotifier {
   List<Album> get albums => _albums;
   List<Artist> get artists => _artists;
   bool get isLoading => _isLoading;
+  bool get isLoadingMore => _isLoadingMore;
+  bool get hasMoreSongs => _songsContinuation != null;
   String get lastQuery => _lastQuery;
   String? get error => _error;
   SearchTab get activeTab => _activeTab;
@@ -72,6 +76,7 @@ class SearchProvider extends ChangeNotifier {
       _songs = results.songs;
       _albums = results.albums;
       _artists = results.artists;
+      _songsContinuation = results.songsContinuation;
     } catch (e) {
       if (generation != _searchGeneration) return;
       _error = 'Search failed. Check your connection.';
@@ -80,6 +85,23 @@ class SearchProvider extends ChangeNotifier {
         _isLoading = false;
         notifyListeners();
       }
+    }
+  }
+
+  Future<void> loadMoreSongs() async {
+    final continuation = _songsContinuation;
+    if (continuation == null || _isLoadingMore || _isLoading) return;
+    _isLoadingMore = true;
+    notifyListeners();
+    try {
+      final (moreSongs, nextContinuation) =
+          await _youtube.loadMoreSongs(continuation);
+      _songs = [..._songs, ...moreSongs];
+      _songsContinuation = nextContinuation;
+    } catch (_) {
+    } finally {
+      _isLoadingMore = false;
+      notifyListeners();
     }
   }
 
@@ -92,6 +114,8 @@ class SearchProvider extends ChangeNotifier {
     _lastQuery = '';
     _error = null;
     _isLoading = false;
+    _isLoadingMore = false;
+    _songsContinuation = null;
     notifyListeners();
   }
 

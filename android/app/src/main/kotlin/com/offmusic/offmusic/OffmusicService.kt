@@ -102,6 +102,9 @@ class OffmusicService : MediaLibraryService() {
         if (sessionActivity != null) builder.setSessionActivity(sessionActivity)
         session = builder.build()
         sharedSession = session
+        // Register with the base class so Media3 manages the phone-side
+        // media notification. Without this call no notification is shown.
+        session?.let { addSession(it) }
         // Show the lyrics toggle button on the player screen
         session?.setCustomLayout(lyricsLayout())
     }
@@ -118,6 +121,7 @@ class OffmusicService : MediaLibraryService() {
 
     override fun onDestroy() {
         sharedSession = null
+        session?.release()
         session = null
         super.onDestroy()
     }

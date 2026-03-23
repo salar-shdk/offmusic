@@ -88,9 +88,9 @@ class HomeService {
     final artist = ((item['shortBylineText']?['runs']) as List?)
         ?.firstOrNull?['text'] as String?;
     final thumbs = (item['thumbnail']?['thumbnails']) as List?;
-    final thumb = thumbs?.isNotEmpty == true
+    final thumb = _upgradeThumb(thumbs?.isNotEmpty == true
         ? thumbs!.last['url'] as String?
-        : null;
+        : null);
     final durationText = ((item['lengthText']?['runs']) as List?)
         ?.firstOrNull?['text'] as String?;
 
@@ -102,7 +102,7 @@ class HomeService {
       artistId: '',
       album: '',
       albumId: '',
-      thumbnailUrl: thumb ?? '',
+      thumbnailUrl: thumb,
       durationSeconds: _parseDuration(durationText),
     );
   }
@@ -223,9 +223,9 @@ class HomeService {
           'text', 'runs', 0, 'text'])) as String?;
     final thumbs = (_dig(item, ['thumbnail', 'musicThumbnailRenderer',
           'thumbnail', 'thumbnails'])) as List?;
-    final thumb = thumbs?.isNotEmpty == true
+    final thumb = _upgradeThumb(thumbs?.isNotEmpty == true
         ? thumbs!.last['url'] as String?
-        : null;
+        : null);
 
     if (title == null) return null;
     return Song(
@@ -235,12 +235,29 @@ class HomeService {
       artistId: '',
       album: '',
       albumId: '',
-      thumbnailUrl: thumb ?? '',
+      thumbnailUrl: thumb,
       durationSeconds: 0,
     );
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
+
+  /// Upgrades a YouTube thumbnail URL to a higher-resolution variant.
+  static String _upgradeThumb(String? url) {
+    if (url == null || url.isEmpty) return '';
+    if (url.contains('lh3.googleusercontent.com')) {
+      return url.replaceAllMapped(
+        RegExp(r'=w\d+-h\d+'),
+        (_) => '=w500-h500',
+      );
+    }
+    if (url.contains('i.ytimg.com')) {
+      return url
+          .replaceAll('mqdefault.jpg', 'hqdefault.jpg')
+          .replaceAll('sddefault.jpg', 'hqdefault.jpg');
+    }
+    return url;
+  }
 
   /// Safely traverses a nested structure via a list of keys/indices.
   dynamic _dig(dynamic obj, List<dynamic> keys) {

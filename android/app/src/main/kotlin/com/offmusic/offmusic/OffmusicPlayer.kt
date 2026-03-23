@@ -91,7 +91,14 @@ class OffmusicPlayer(private val context: Context) {
         .also { player ->
             player.addListener(object : Player.Listener {
                 override fun onIsPlayingChanged(isPlaying: Boolean) = emitState()
-                override fun onPlaybackStateChanged(state: Int) = emitState()
+                override fun onPlaybackStateChanged(state: Int) {
+                    emitState()
+                    if (state == Player.STATE_ENDED) {
+                        mainHandler.post {
+                            onStateChange?.invoke(mapOf("command" to "songEnded"))
+                        }
+                    }
+                }
                 override fun onPositionDiscontinuity(
                     old: Player.PositionInfo,
                     new: Player.PositionInfo,

@@ -12,6 +12,7 @@ class LyricsView extends StatefulWidget {
 class _LyricsViewState extends State<LyricsView> {
   final _scrollController = ScrollController();
   int _lastIndex = -1;
+  GlobalKey? _currentLineKey;
 
   @override
   void dispose() {
@@ -20,14 +21,19 @@ class _LyricsViewState extends State<LyricsView> {
   }
 
   void _scrollToCurrentLine(int index) {
-    if (index == _lastIndex || !_scrollController.hasClients) return;
+    if (index == _lastIndex) return;
     _lastIndex = index;
-    final offset = (index * 52.0) - 150;
-    _scrollController.animateTo(
-      offset.clamp(0, _scrollController.position.maxScrollExtent),
-      duration: const Duration(milliseconds: 400),
-      curve: Curves.easeInOut,
-    );
+    // Use post-frame callback so the key's context is mounted and sized.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _currentLineKey?.currentContext;
+      if (ctx == null || !_scrollController.hasClients) return;
+      Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.5, // center the active line vertically
+        duration: const Duration(milliseconds: 400),
+        curve: Curves.easeInOut,
+      );
+    });
   }
 
   @override
@@ -86,7 +92,9 @@ class _LyricsViewState extends State<LyricsView> {
         final line = lyrics.lines[i];
         final isCurrent = i == currentIndex;
         final isPast = i < currentIndex;
+        if (isCurrent) _currentLineKey = GlobalKey();
         return GestureDetector(
+          key: isCurrent ? _currentLineKey : null,
           onTap: () => player.seek(line.timestamp),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),

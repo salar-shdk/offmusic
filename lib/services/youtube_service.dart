@@ -15,11 +15,13 @@ class SearchResults {
   final List<Song> songs;
   final List<Album> albums;
   final List<Artist> artists;
+  final String? songsContinuation;
 
   const SearchResults({
     required this.songs,
     required this.albums,
     required this.artists,
+    this.songsContinuation,
   });
 }
 
@@ -128,19 +130,75 @@ class YouTubeService {
   // ── Search ────────────────────────────────────────────────────────────────────
 
   Future<SearchResults> search(String query) async {
-    final results = await Future.wait([
-      _searchMusicSongs(query),
-      _searchAlbumsViaMusicApi(query),
-      _searchMusicArtists(query),
-    ]);
+    final songsFuture = _searchMusicSongsWithContinuation(query);
+    final albumsFuture = _searchAlbumsViaMusicApi(query);
+    final artistsFuture = _searchMusicArtists(query);
+    final songs = await songsFuture;
+    final albums = await albumsFuture;
+    final artists = await artistsFuture;
     return SearchResults(
-      songs: results[0] as List<Song>,
-      albums: results[1] as List<Album>,
-      artists: results[2] as List<Artist>,
+      songs: songs.$1,
+      albums: albums,
+      artists: artists,
+      songsContinuation: songs.$2,
     );
   }
 
   Future<List<Song>> searchSongs(String query) => _searchMusicSongs(query);
+
+  /// Loads the next page of song results using a continuation token from a
+  /// previous search. Returns the new songs and the next continuation token
+  /// (null if there are no more pages).
+  Future<(List<Song>, String?)> loadMoreSongs(String continuation) async {
+    try {
+      final response = await _httpClient
+          .post(
+            Uri.parse(_kMusicSearchUrl),
+            headers: const {
+              'Content-Type': 'application/json',
+              'User-Agent': 'Mozilla/5.0',
+              'X-YouTube-Client-Name': '67',
+              'X-YouTube-Client-Version': _kMusicClientVersion,
+              'Origin': 'https://music.youtube.com',
+              'Referer': 'https://music.youtube.com/',
+            },
+            body: jsonEncode({
+              'context': {
+                'client': {
+                  'clientName': 'WEB_REMIX',
+                  'clientVersion': _kMusicClientVersion,
+                  'hl': 'en',
+                  'gl': 'US',
+                },
+              },
+              'continuation': continuation,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode != 200) return (<Song>[], null);
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+      final contents = _dig(data, [
+        'continuationContents', 'musicShelfContinuation', 'contents',
+      ]) as List?;
+      if (contents == null) return (<Song>[], null);
+
+      final songs = <Song>[];
+      for (final item in contents) {
+        final song = _parseMusicSong(item);
+        if (song != null) songs.add(song);
+      }
+
+      final nextToken = _dig(data, [
+        'continuationContents', 'musicShelfContinuation',
+        'continuations', 0, 'nextContinuationData', 'continuation',
+      ]) as String?;
+
+      return (songs, nextToken);
+    } catch (_) {
+      return (<Song>[], null);
+    }
+  }
 
   /// Returns a list of songs similar to [seed] using the search endpoint.
   /// Searches by artist first, falls back to title if artist is empty.
@@ -179,6 +237,44 @@ class YouTubeService {
     } catch (_) {
       return [];
     }
+  }
+
+  /// Same as [_searchMusicSongs] but also returns the continuation token for
+  /// fetching the next page of results.
+  Future<(List<Song>, String?)> _searchMusicSongsWithContinuation(
+      String query) async {
+    try {
+      final data = await _musicSearch(query, _kSongsFilterParam);
+      if (data == null) return (<Song>[], null);
+      final songs = <Song>[];
+      for (final item in _musicShelfItems(data)) {
+        final song = _parseMusicSong(item);
+        if (song != null) songs.add(song);
+      }
+      final continuation = _extractSearchContinuation(data);
+      return (songs, continuation);
+    } catch (_) {
+      return (<Song>[], null);
+    }
+  }
+
+  /// Extracts the continuation token from the first musicShelfRenderer in a
+  /// search response. Returns null if there are no more pages.
+  String? _extractSearchContinuation(Map<String, dynamic> data) {
+    final tabs = (data['contents'] as Map?)
+        ?['tabbedSearchResultsRenderer']?['tabs'] as List?;
+    final sections = tabs?.firstOrNull?['tabRenderer']?['content']
+        ?['sectionListRenderer']?['contents'] as List?;
+    if (sections == null) return null;
+    for (final section in sections) {
+      final shelf = section['musicShelfRenderer'] as Map?;
+      if (shelf != null) {
+        return _dig(shelf, [
+          'continuations', 0, 'nextContinuationData', 'continuation',
+        ]) as String?;
+      }
+    }
+    return null;
   }
 
   /// Searches YouTube Music for artists using the InnerTube WEB_REMIX client.
@@ -272,9 +368,9 @@ class YouTubeService {
     final thumbs = _dig(item, [
       'thumbnail', 'musicThumbnailRenderer', 'thumbnail', 'thumbnails',
     ]) as List?;
-    final thumb = thumbs?.isNotEmpty == true
+    final thumb = _upgradeThumb(thumbs?.isNotEmpty == true
         ? thumbs!.last['url'] as String?
-        : null;
+        : null);
 
     if (title == null) return null;
     return Song(
@@ -284,7 +380,7 @@ class YouTubeService {
       artistId: '',
       album: '',
       albumId: '',
-      thumbnailUrl: thumb ?? '',
+      thumbnailUrl: thumb,
       durationSeconds: 0,
     );
   }
@@ -306,15 +402,40 @@ class YouTubeService {
     final thumbs = _dig(item, [
       'thumbnail', 'musicThumbnailRenderer', 'thumbnail', 'thumbnails',
     ]) as List?;
-    final thumb = thumbs?.isNotEmpty == true
+    final thumb = _upgradeThumb(thumbs?.isNotEmpty == true
         ? thumbs!.last['url'] as String?
-        : null;
+        : null);
 
     return Artist(
       id: browseId ?? name,
       name: name,
-      thumbnailUrl: thumb ?? '',
+      thumbnailUrl: thumb,
     );
+  }
+
+  /// Upgrades a YouTube thumbnail URL to a higher-resolution variant.
+  ///
+  /// lh3.googleusercontent.com URLs embed the size in the suffix, e.g.
+  /// `=w226-h226-l90-rj`. Replacing it with `=w500-h500-l90-rj` fetches a
+  /// larger image from the same CDN at no extra cost.
+  ///
+  /// i.ytimg.com URLs use named quality levels — `hqdefault` is safe and
+  /// widely available at 480×360; `maxresdefault` is higher (1280×720) but
+  /// not guaranteed for every video.
+  static String _upgradeThumb(String? url) {
+    if (url == null || url.isEmpty) return '';
+    if (url.contains('lh3.googleusercontent.com')) {
+      return url.replaceAllMapped(
+        RegExp(r'=w\d+-h\d+'),
+        (_) => '=w500-h500',
+      );
+    }
+    if (url.contains('i.ytimg.com')) {
+      return url
+          .replaceAll('mqdefault.jpg', 'hqdefault.jpg')
+          .replaceAll('sddefault.jpg', 'hqdefault.jpg');
+    }
+    return url;
   }
 
   /// Safely traverses a nested structure via a list of keys/indices.
@@ -392,9 +513,9 @@ class YouTubeService {
     final thumbs = _dig(item, [
       'thumbnail', 'musicThumbnailRenderer', 'thumbnail', 'thumbnails',
     ]) as List?;
-    final thumbUrl = thumbs?.isNotEmpty == true
-        ? (thumbs!.last['url'] as String? ?? '')
-        : '';
+    final thumbUrl = _upgradeThumb(thumbs?.isNotEmpty == true
+        ? (thumbs!.last['url'] as String?)
+        : null);
 
     return Album(
       id: browseId,
@@ -468,7 +589,7 @@ class YouTubeService {
               'thumbnails',
             ])) as List?;
         if (thumbs != null && thumbs.isNotEmpty) {
-          albumThumb = thumbs.last['url'] as String? ?? '';
+          albumThumb = _upgradeThumb(thumbs.last['url'] as String?);
           break;
         }
       }
@@ -562,9 +683,9 @@ class YouTubeService {
       'thumbnail',
       'thumbnails',
     ]) as List?;
-    final songThumb = thumbs != null && thumbs.isNotEmpty
-        ? (thumbs.last['url'] as String? ?? '')
-        : '';
+    final songThumb = _upgradeThumb(thumbs != null && thumbs.isNotEmpty
+        ? (thumbs.last['url'] as String?)
+        : null);
     final thumb = songThumb.isNotEmpty ? songThumb : albumThumb;
 
     return Song(
@@ -919,7 +1040,7 @@ class YouTubeService {
       artistId: video.channelId.value,
       album: '',
       albumId: '',
-      thumbnailUrl: video.thumbnails.highResUrl,
+      thumbnailUrl: _upgradeThumb(video.thumbnails.highResUrl),
       durationSeconds: video.duration?.inSeconds ?? 0,
     );
   }

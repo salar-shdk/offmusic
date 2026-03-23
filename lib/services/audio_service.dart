@@ -108,6 +108,7 @@ class AudioPlayerService {
     final command = map['command'] as String?;
     if (command == 'skipNext') { unawaited(skipNext()); return; }
     if (command == 'skipPrev') { unawaited(skipPrevious()); return; }
+    if (command == 'songEnded') { unawaited(_onSongEnded()); return; }
     if (command == 'autoQueue') {
       // Android Auto expanded a collection (quick picks / liked / playlist /
       // category) — sync Flutter's queue so the UI and skip logic are correct.
@@ -346,6 +347,25 @@ class AudioPlayerService {
     final prev = queue[prevIndex];
     _updateState(_state.copyWith(queueIndex: prevIndex, currentSong: prev));
     await _loadAndPlay(prev);
+  }
+
+  /// Called when a song finishes playing naturally. Respects repeat mode:
+  /// - RepeatMode.one  → seek to start and resume
+  /// - RepeatMode.all  → advance to next (wraps around)
+  /// - RepeatMode.none → advance only if not at the end of the queue
+  Future<void> _onSongEnded() async {
+    switch (_state.repeatMode) {
+      case RepeatMode.one:
+        await seek(Duration.zero);
+        try { await _method.invokeMethod('resume'); } catch (_) {}
+      case RepeatMode.all:
+        await skipNext();
+      case RepeatMode.none:
+        final queue = _state.queue;
+        if (queue.isEmpty) return;
+        final isLast = _state.queueIndex >= queue.length - 1;
+        if (!isLast) await skipNext();
+    }
   }
 
   void cycleRepeat() {

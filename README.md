@@ -24,6 +24,7 @@ A free, open-source music streaming app for Android built with Flutter. Stream a
 - **Backup & Restore** — export your entire library to a JSON file and import it on any device
 - **Auto-cleanup** — optionally delete cached audio that hasn't been played in N days
 - **Background playback** — media notification with controls; resumes seamlessly when you reopen the app
+- **Android Auto** — Now fully supports Android Auto
 
 ## Screenshots
 <img src="https://github.com/user-attachments/assets/e7282e03-e907-4b67-b0fe-2d367be12a6a" alt="photo_1" width="228" height="640">

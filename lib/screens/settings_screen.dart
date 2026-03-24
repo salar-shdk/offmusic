@@ -147,7 +147,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const ListTile(
             leading: Icon(Icons.info_outline_rounded),
             title: Text('offmusic'),
-            subtitle: Text('Version 1.0.0'),
+            subtitle: Text('Version 1.2.1'),
           ),
           ListTile(
             leading: const Icon(Icons.code_rounded),

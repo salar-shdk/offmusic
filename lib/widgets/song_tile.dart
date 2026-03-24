@@ -78,12 +78,20 @@ class SongTile extends StatelessWidget {
                           style: theme.textTheme.bodyMedium,
                         ),
                       ),
-                      Text(
-                        song.duration,
-                        style: theme.textTheme.bodyMedium,
-                      ),
+                      if (song.durationSeconds > 0)
+                        Text(
+                          song.duration,
+                          style: theme.textTheme.bodyMedium,
+                        ),
                     ],
                   ),
+                  if (song.playCount != null)
+                    Text(
+                      song.playCount!,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: Colors.white38,
+                      ),
+                    ),
                 ],
               ),
             ),

@@ -131,15 +131,24 @@ class OffmusicPlayer(private val context: Context) {
      * ForwardingPlayer that intercepts seekToNext/seekToPrevious and routes them
      * back to Flutter instead of advancing within a single-item ExoPlayer queue.
      * Always advertises next/prev as available so the notification shows both buttons.
+     * Overrides both seekToNext/seekToNextMediaItem because Media3 may dispatch either
+     * form, and hasNextMediaItem/hasPreviousMediaItem to prevent silent no-ops when
+     * ExoPlayer's queue contains only one item.
      */
     val routingPlayer: ForwardingPlayer = object : ForwardingPlayer(exoPlayer) {
         override fun getAvailableCommands(): Player.Commands =
             super.getAvailableCommands().buildUpon()
                 .add(Player.COMMAND_SEEK_TO_NEXT)
+                .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
                 .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
                 .build()
-        override fun seekToNext() { mainHandler.post { onSkipNext?.invoke() } }
-        override fun seekToPrevious() { mainHandler.post { onSkipPrev?.invoke() } }
+        override fun hasNextMediaItem()     = true
+        override fun hasPreviousMediaItem() = true
+        override fun seekToNext()          { mainHandler.post { onSkipNext?.invoke() } }
+        override fun seekToNextMediaItem() { mainHandler.post { onSkipNext?.invoke() } }
+        override fun seekToPrevious()          { mainHandler.post { onSkipPrev?.invoke() } }
+        override fun seekToPreviousMediaItem() { mainHandler.post { onSkipPrev?.invoke() } }
     }
 
     // Tracks which lyric line is currently shown in ExoPlayer's subtitle field.

@@ -43,6 +43,9 @@ class Song extends HiveObject {
   @HiveField(12)
   DateTime? streamUrlExpiry;
 
+  // Not persisted — populated from search results only.
+  final String? playCount;
+
   Song({
     required this.id,
     required this.title,
@@ -57,6 +60,7 @@ class Song extends HiveObject {
     this.cachedAt,
     this.streamUrl,
     this.streamUrlExpiry,
+    this.playCount,
   });
 
   bool get isAvailableOffline => cachedAudioPath != null;
@@ -93,6 +97,7 @@ class Song extends HiveObject {
       cachedAt: cachedAt ?? this.cachedAt,
       streamUrl: streamUrl ?? this.streamUrl,
       streamUrlExpiry: streamUrlExpiry ?? this.streamUrlExpiry,
+      playCount: playCount,
     );
   }
 }

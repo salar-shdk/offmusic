@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/search_provider.dart';
-import '../providers/player_provider.dart';
-import '../providers/library_provider.dart';
 import '../models/artist.dart';
 import '../widgets/song_tile.dart';
 import '../widgets/album_card.dart';
@@ -244,70 +242,11 @@ class _SongsTabState extends State<_SongsTab> {
           song: songs[i],
           queue: List.from(songs),
           index: i,
-          onMoreTap: () => _showSongOptions(context, songs[i]),
         );
       },
     );
   }
 
-  void _showSongOptions(BuildContext context, song) {
-    final library = context.read<LibraryProvider>();
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.queue_music_rounded),
-              title: const Text('Add to queue'),
-              onTap: () {
-                Navigator.pop(ctx);
-                context.read<PlayerProvider>().addToQueue(song);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.playlist_add_rounded),
-              title: const Text('Add to playlist'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _showAddToPlaylist(context, song, library);
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showAddToPlaylist(BuildContext context, song, LibraryProvider library) {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('Add to playlist',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-            ),
-            if (library.playlists.isEmpty)
-              const ListTile(title: Text('No playlists. Create one first.'))
-            else
-              ...library.playlists.map((pl) => ListTile(
-                    leading: const Icon(Icons.playlist_play_rounded),
-                    title: Text(pl.name),
-                    onTap: () {
-                      library.addSongToPlaylist(pl.id, song);
-                      Navigator.pop(ctx);
-                    },
-                  )),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 class _AlbumsTab extends StatelessWidget {

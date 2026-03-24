@@ -105,8 +105,6 @@ class OffmusicService : MediaLibraryService() {
         // Register with the base class so Media3 manages the phone-side
         // media notification. Without this call no notification is shown.
         session?.let { addSession(it) }
-        // Show the lyrics toggle button on the player screen
-        session?.setCustomLayout(lyricsLayout())
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
@@ -143,7 +141,9 @@ class OffmusicService : MediaLibraryService() {
 
     inner class BrowseCallback : MediaLibrarySession.Callback {
 
-        // Register the lyrics toggle command so controllers can use it
+        // Register the lyrics toggle command so Auto can use it.
+        // The lyrics button is pushed to Auto via setCustomLayout only when
+        // Auto connects, so the phone notification never shows the extra button.
         override fun onConnect(
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
@@ -152,6 +152,10 @@ class OffmusicService : MediaLibraryService() {
             val commands = result.availableSessionCommands.buildUpon()
                 .add(SessionCommand(CMD_TOGGLE_LYRICS, Bundle.EMPTY))
                 .build()
+            // Show the lyrics button in Android Auto but not in the phone notification
+            if (isAutoController(controller)) {
+                session.setCustomLayout(lyricsLayout())
+            }
             return MediaSession.ConnectionResult.accept(commands, result.availablePlayerCommands)
         }
 
@@ -169,7 +173,12 @@ class OffmusicService : MediaLibraryService() {
                     sharedPlayer?.clearSubtitle()
                 }
                 sharedPlayer?.resetLyricTracking()
-                sharedSession?.setCustomLayout(lyricsLayout())
+                // Refresh the lyrics button label for Auto (setCustomLayout is
+                // safe to call here — the phone notification ignores custom layout
+                // because it was never set at session init time)
+                if (sharedSession?.connectedControllers?.any { isAutoController(it) } == true) {
+                    sharedSession?.setCustomLayout(lyricsLayout())
+                }
                 return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
             }
             return super.onCustomCommand(session, controller, customCommand, args)
@@ -290,6 +299,13 @@ class OffmusicService : MediaLibraryService() {
             mediaItems: List<MediaItem>,
         ): ListenableFuture<List<MediaItem>> =
             Futures.immediateFuture(mediaItems.map { resolveItem(it) })
+
+        private fun isAutoController(controller: MediaSession.ControllerInfo): Boolean {
+            val pkg = controller.packageName
+            return pkg == "com.google.android.projection.gearhead" ||
+                   pkg.contains("gearhead") ||
+                   pkg.contains("automotive")
+        }
     }
 
     // ── URI resolution ─────────────────────────────────────────────────────

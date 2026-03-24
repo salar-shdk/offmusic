@@ -362,9 +362,74 @@ class YouTubeService {
     final title = _dig(cols, [
       0, 'musicResponsiveListItemFlexColumnRenderer', 'text', 'runs', 0, 'text',
     ]) as String?;
-    final artist = _dig(cols, [
-      1, 'musicResponsiveListItemFlexColumnRenderer', 'text', 'runs', 0, 'text',
-    ]) as String?;
+
+    String? artist;
+    String? playCount;
+    int durationSeconds = 0;
+    final durationRe = RegExp(r'^\d+:\d{2}(?::\d{2})?$');
+    // Matches "1.2M plays", "45K views", "1,234 plays", etc.
+    final playsRe = RegExp(r'(?:plays|views)', caseSensitive: false);
+    // Abbreviated standalone number that may precede a "plays" run: "1.2B", "45K"
+    final shortNumRe = RegExp(r'^\d[\d.,]*\s*[KkMmBbTt]?$');
+
+    // Duration is typically in fixedColumns[0] on the WEB_REMIX client.
+    final fixedCols = item['fixedColumns'] as List?;
+    final fixedDurText = (_dig(fixedCols, [
+      0, 'musicResponsiveListItemFixedColumnRenderer', 'text', 'runs', 0, 'text',
+    ]) as String?)?.trim() ?? '';
+    if (durationRe.hasMatch(fixedDurText)) {
+      final parts = fixedDurText.split(':');
+      durationSeconds = parts.length == 3
+          ? (int.tryParse(parts[0]) ?? 0) * 3600 +
+            (int.tryParse(parts[1]) ?? 0) * 60 +
+            (int.tryParse(parts[2]) ?? 0)
+          : (int.tryParse(parts[0]) ?? 0) * 60 +
+            (int.tryParse(parts[1]) ?? 0);
+    }
+
+    // Scan all subtitle flex columns (1+) for artist and play count.
+    // Play count may be a single run ("1.2B plays") or two consecutive runs
+    // ("1.2B" then "plays"), so track pendingNum across runs.
+    String? pendingNum;
+    for (int c = 1; c < (cols?.length ?? 0); c++) {
+      final runs = (_dig(cols, [
+        c, 'musicResponsiveListItemFlexColumnRenderer', 'text', 'runs',
+      ]) as List?) ?? [];
+      for (final run in runs) {
+        final text = ((run as Map)['text'] as String? ?? '').trim();
+        if (text.isEmpty || text == '•') {
+          pendingNum = null;
+          continue;
+        }
+        if (durationSeconds == 0 && durationRe.hasMatch(text)) {
+          // Fallback: duration in flex column
+          final parts = text.split(':');
+          durationSeconds = parts.length == 3
+              ? (int.tryParse(parts[0]) ?? 0) * 3600 +
+                (int.tryParse(parts[1]) ?? 0) * 60 +
+                (int.tryParse(parts[2]) ?? 0)
+              : (int.tryParse(parts[0]) ?? 0) * 60 +
+                (int.tryParse(parts[1]) ?? 0);
+          pendingNum = null;
+        } else if (playsRe.hasMatch(text)) {
+          // "1.2B plays" as one run, OR "plays"/"views" after a number run
+          playCount = pendingNum != null ? '$pendingNum $text'.trim() : text;
+          pendingNum = null;
+        } else if (shortNumRe.hasMatch(text)) {
+          // Could be abbreviated play count number right before "plays" run
+          pendingNum = text;
+        } else {
+          if (artist == null && run['navigationEndpoint'] != null) {
+            artist = text;
+          } else {
+            artist ??= text;
+          }
+          pendingNum = null;
+        }
+      }
+      pendingNum = null;
+    }
+
     final thumbs = _dig(item, [
       'thumbnail', 'musicThumbnailRenderer', 'thumbnail', 'thumbnails',
     ]) as List?;
@@ -381,7 +446,8 @@ class YouTubeService {
       album: '',
       albumId: '',
       thumbnailUrl: thumb,
-      durationSeconds: 0,
+      durationSeconds: durationSeconds,
+      playCount: playCount,
     );
   }
 
@@ -1020,6 +1086,216 @@ class YouTubeService {
     } catch (_) {}
     return songs;
   }
+
+  static const _kMusicBrowseHeaders = {
+    'Content-Type': 'application/json',
+    'User-Agent': 'Mozilla/5.0',
+    'X-YouTube-Client-Name': '67',
+    'X-YouTube-Client-Version': _kMusicClientVersion,
+    'Origin': 'https://music.youtube.com',
+    'Referer': 'https://music.youtube.com/',
+  };
+
+  Map<String, dynamic> _musicBrowseBody(String browseId, {String? params}) => {
+        'context': {
+          'client': {
+            'clientName': 'WEB_REMIX',
+            'clientVersion': _kMusicClientVersion,
+            'hl': 'en',
+            'gl': 'US',
+          },
+        },
+        'browseId': browseId,
+        if (params != null) 'params': params,
+      };
+
+  /// Fetches an artist's complete songs and albums from the YouTube Music API.
+  /// Uses the main artist browse page for top songs + carousel items, then
+  /// follows every carousel's "See all" browse endpoint to get the full release
+  /// list (albums, singles, EPs). Songs are supplemented via artist search.
+  Future<({List<Song> songs, List<Album> albums})> getArtistPage(
+      String browseId, String artistName) async {
+    try {
+      final response = await _httpClient
+          .post(
+            Uri.parse(_kMusicBrowseUrl),
+            headers: _kMusicBrowseHeaders,
+            body: jsonEncode(_musicBrowseBody(browseId)),
+          )
+          .timeout(const Duration(seconds: 12));
+
+      if (response.statusCode != 200) {
+        return (songs: <Song>[], albums: <Album>[]);
+      }
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+      final sections = _dig(data, [
+        'contents', 'singleColumnBrowseResultsRenderer', 'tabs', 0,
+        'tabRenderer', 'content', 'sectionListRenderer', 'contents',
+      ]) as List?;
+
+      if (sections == null) return (songs: <Song>[], albums: <Album>[]);
+
+      final songs  = <Song>[];
+      final albums = <Album>[];
+      // "See all" endpoints: {browseId, params} pairs to fetch full lists
+      final seeAllEndpoints = <Map<String, String>>[];
+
+      for (final section in sections) {
+        final map = section as Map;
+
+        // Songs — musicShelfRenderer (typically top 5)
+        final shelf = map['musicShelfRenderer'] as Map?;
+        if (shelf != null) {
+          for (final item in (shelf['contents'] as List? ?? [])) {
+            final song = _parseMusicSong(item);
+            if (song != null) songs.add(song);
+          }
+        }
+
+        // Albums / Singles — musicCarouselShelfRenderer
+        final carousel = map['musicCarouselShelfRenderer'] as Map?;
+        if (carousel != null) {
+          // Collect what's already visible in the carousel
+          for (final item in (carousel['contents'] as List? ?? [])) {
+            final album = _parseTwoRowAlbum(item, artistName: artistName);
+            if (album != null) albums.add(album);
+          }
+          // Extract "See all" browse endpoint from the carousel header
+          final ep = _dig(carousel, [
+            'header', 'musicCarouselShelfBasicHeaderRenderer',
+            'moreContentButton', 'buttonRenderer',
+            'navigationEndpoint', 'browseEndpoint',
+          ]) as Map?;
+          final epBrowseId = ep?['browseId'] as String?;
+          final epParams   = ep?['params'] as String?;
+          if (epBrowseId != null && epParams != null) {
+            seeAllEndpoints.add({'browseId': epBrowseId, 'params': epParams});
+          }
+        }
+      }
+
+      // Fetch complete release lists via "See all" endpoints (in parallel)
+      if (seeAllEndpoints.isNotEmpty) {
+        final futures = seeAllEndpoints.map(
+          (ep) => _fetchArtistReleases(
+              ep['browseId']!, ep['params']!, artistName),
+        );
+        for (final more in await Future.wait(futures)) {
+          albums.addAll(more);
+        }
+      }
+
+      // Supplement songs via artist-name search (gets far more than the 5
+      // top songs shown on the browse page)
+      final searchedSongs = await _searchMusicSongs(artistName);
+      final seenSongIds = songs.map((s) => s.id).toSet();
+      for (final s in searchedSongs) {
+        if (seenSongIds.add(s.id)) songs.add(s);
+      }
+
+      // Deduplicate albums
+      final seenAlbumIds = <String>{};
+      final uniqueAlbums =
+          albums.where((a) => seenAlbumIds.add(a.id)).toList();
+
+      return (songs: songs, albums: uniqueAlbums);
+    } catch (_) {
+      return (songs: <Song>[], albums: <Album>[]);
+    }
+  }
+
+  /// Fetches a complete release list from a "See all" artist browse endpoint.
+  /// The response uses a gridRenderer containing musicTwoRowItemRenderer items.
+  Future<List<Album>> _fetchArtistReleases(
+      String browseId, String params, String artistName) async {
+    try {
+      final response = await _httpClient
+          .post(
+            Uri.parse(_kMusicBrowseUrl),
+            headers: _kMusicBrowseHeaders,
+            body: jsonEncode(_musicBrowseBody(browseId, params: params)),
+          )
+          .timeout(const Duration(seconds: 12));
+
+      if (response.statusCode != 200) return [];
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+      // "See all" pages use a gridRenderer for the items
+      final items = (_dig(data, [
+            'contents', 'singleColumnBrowseResultsRenderer', 'tabs', 0,
+            'tabRenderer', 'content', 'sectionListRenderer', 'contents', 0,
+            'gridRenderer', 'items',
+          ]) ??
+          _dig(data, [
+            'contents', 'singleColumnBrowseResultsRenderer', 'tabs', 0,
+            'tabRenderer', 'content', 'sectionListRenderer', 'contents', 0,
+            'musicShelfRenderer', 'contents',
+          ])) as List? ?? [];
+
+      final albums = <Album>[];
+      for (final item in items) {
+        final album = _parseTwoRowAlbum(item, artistName: artistName);
+        if (album != null) albums.add(album);
+      }
+      return albums;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Parses a musicTwoRowItemRenderer (used in artist carousels) into an Album.
+  Album? _parseTwoRowAlbum(dynamic raw, {String artistName = ''}) {
+    final item = (raw as Map?)
+        ?['musicTwoRowItemRenderer'] as Map<String, dynamic>?;
+    if (item == null) return null;
+
+    final browseId = _dig(item,
+        ['navigationEndpoint', 'browseEndpoint', 'browseId']) as String?;
+    if (browseId == null) return null;
+
+    // Only accept albums/EPs/singles — skip artist/playlist items in carousels
+    final pageType = _dig(item, [
+      'navigationEndpoint', 'browseEndpoint',
+      'browseEndpointContextSupportedConfigs',
+      'browseEndpointContextMusicConfig', 'pageType',
+    ]) as String?;
+    if (pageType != null && !pageType.contains('ALBUM')) return null;
+
+    final title = _dig(item, ['title', 'runs', 0, 'text']) as String?;
+    if (title == null) return null;
+
+    final subtitleRuns =
+        (_dig(item, ['subtitle', 'runs']) as List?) ?? [];
+    int year = DateTime.now().year;
+    for (final run in subtitleRuns) {
+      final text = ((run as Map)['text'] as String? ?? '').trim();
+      final parsed = int.tryParse(text);
+      if (parsed != null && parsed > 1900 && parsed <= DateTime.now().year) {
+        year = parsed;
+        break;
+      }
+    }
+
+    final thumbs = _dig(item, [
+      'thumbnailRenderer', 'musicThumbnailRenderer', 'thumbnail', 'thumbnails',
+    ]) as List?;
+    final thumb = _upgradeThumb(
+        thumbs?.isNotEmpty == true ? thumbs!.last['url'] as String? : null);
+
+    return Album(
+      id: browseId,
+      title: title,
+      artist: artistName,
+      artistId: '',
+      thumbnailUrl: thumb,
+      year: year,
+      songIds: [],
+    );
+  }
+
+  Future<List<Album>> searchAlbums(String query) =>
+      _searchAlbumsViaMusicApi(query);
 
   Future<List<Song>> getArtistSongs(String channelId) async {
     final songs = <Song>[];

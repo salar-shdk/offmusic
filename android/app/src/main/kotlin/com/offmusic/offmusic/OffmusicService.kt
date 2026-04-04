@@ -5,7 +5,10 @@ package com.offmusic.offmusic
 import android.app.PendingIntent
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.core.net.toUri
+import androidx.media3.common.Player
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -86,8 +89,13 @@ class OffmusicService : MediaLibraryService() {
     }
 
     private fun tryCreateSession() {
-        val player = sharedPlayer ?: return
         if (session != null) return
+        // Android Auto can start the service before Flutter creates PlayerBridge.
+        // Create a player here so the session is always available for Auto.
+        if (sharedPlayer == null) {
+            sharedPlayer = OffmusicPlayer(applicationContext)
+        }
+        val player = sharedPlayer ?: return
         setMediaNotificationProvider(
             DefaultMediaNotificationProvider(this)
                 .also { it.setSmallIcon(R.drawable.ic_notif_music) }
@@ -155,6 +163,10 @@ class OffmusicService : MediaLibraryService() {
             // Show the lyrics button in Android Auto but not in the phone notification
             if (isAutoController(controller)) {
                 session.setCustomLayout(lyricsLayout())
+                // Auto-resume playback if the user has the setting enabled
+                if (AutoDataStore.autoPlayOnConnect) {
+                    Handler(Looper.getMainLooper()).post { resumeForAuto() }
+                }
             }
             return MediaSession.ConnectionResult.accept(commands, result.availablePlayerCommands)
         }
@@ -300,11 +312,43 @@ class OffmusicService : MediaLibraryService() {
         ): ListenableFuture<List<MediaItem>> =
             Futures.immediateFuture(mediaItems.map { resolveItem(it) })
 
+        override fun onDisconnected(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ) {
+            if (isAutoController(controller)) {
+                Handler(Looper.getMainLooper()).post {
+                    sharedPlayer?.pause()
+                }
+            }
+        }
+
         private fun isAutoController(controller: MediaSession.ControllerInfo): Boolean {
             val pkg = controller.packageName
             return pkg == "com.google.android.projection.gearhead" ||
                    pkg.contains("gearhead") ||
                    pkg.contains("automotive")
+        }
+    }
+
+    /**
+     * Called on the main thread when Android Auto connects with auto-play enabled.
+     * Resumes playback if ExoPlayer already has a media item loaded (e.g. the user
+     * was listening before getting in the car). If the player has no media but
+     * Quick Picks are available, starts the first one.
+     */
+    private fun resumeForAuto() {
+        val player = sharedPlayer ?: return
+        val exo = player.exoPlayer
+        if (exo.mediaItemCount > 0) {
+            // Re-prepare if idle (e.g. player was stopped), then play
+            if (exo.playbackState == Player.STATE_IDLE) exo.prepare()
+            exo.play()
+        } else if (AutoDataStore.quickPicks.isNotEmpty()) {
+            val song = AutoDataStore.quickPicks[0]
+            player.play(song.id, title = song.title, artist = song.artist,
+                thumbnailUrl = song.thumbnailUrl)
+            player.sendAutoQueue(AutoDataStore.quickPicks, 0)
         }
     }
 

@@ -135,6 +135,11 @@ class PlayerBridge(
                     }
                     result.success(null)
                 }
+                "auto_setAutoplay" -> {
+                    AutoDataStore.autoPlayOnConnect =
+                        call.argument<Boolean>("enabled") ?: false
+                    result.success(null)
+                }
                 "auto_setCategories" -> {
                     val rawCats = call.argument<List<Map<String, Any?>>>("categories") ?: emptyList()
                     AutoDataStore.categories = rawCats.map { c ->

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../models/song.dart';
 import '../providers/library_provider.dart';
 import '../providers/player_provider.dart';
@@ -24,6 +25,26 @@ class PlaylistScreen extends StatelessWidget {
       appBar: AppBar(
         title: Text(playlist.name),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.share_rounded),
+            tooltip: 'Share playlist',
+            onPressed: () async {
+              final library = context.read<LibraryProvider>();
+              try {
+                final file = await library.exportPlaylist(playlistId);
+                await Share.shareXFiles(
+                  [XFile(file.path)],
+                  subject: '${playlist.name} — offmusic playlist',
+                );
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Export failed: $e')),
+                  );
+                }
+              }
+            },
+          ),
           if (songs.isNotEmpty) ...[
             IconButton(
               icon: const Icon(Icons.shuffle_rounded),

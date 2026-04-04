@@ -357,8 +357,7 @@ class OffmusicPlayer(private val context: Context) {
         onStateChange?.invoke(mapOf(
             "isPlaying"    to exoPlayer.isPlaying,
             "isBuffering"  to (exoPlayer.playbackState == Player.STATE_BUFFERING),
-            "isLoading"    to (exoPlayer.playbackState == Player.STATE_IDLE ||
-                               exoPlayer.playbackState == Player.STATE_BUFFERING),
+            "isLoading"    to (exoPlayer.playbackState == Player.STATE_BUFFERING),
             "position"     to exoPlayer.currentPosition,
             "duration"     to dur,
             // Always include song metadata so Flutter can restore state when

@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:uuid/uuid.dart';
 import '../models/song.dart';
 import '../models/album.dart';
 import '../models/artist.dart';
@@ -320,5 +321,74 @@ class DatabaseService {
         ));
       }
     }
+  }
+
+  /// Serialises a single playlist (and its songs) to a shareable map.
+  /// Uses the same structure as [exportData] but scoped to one playlist,
+  /// so [importPlaylist] (and the existing importData) can handle it.
+  Map<String, dynamic> exportPlaylist(String playlistId) {
+    final pl = getPlaylist(playlistId);
+    if (pl == null) return {};
+    return {
+      'version': 1,
+      'type': 'playlist',
+      'exportedAt': DateTime.now().toIso8601String(),
+      'playlist': {
+        'id': pl.id,
+        'name': pl.name,
+        'description': pl.description,
+        'createdAt': pl.createdAt.toIso8601String(),
+        'songIds': pl.songIds,
+        'songs': pl.songIds
+            .map(getSong)
+            .whereType<Song>()
+            .map((s) => {
+                  'id': s.id,
+                  'title': s.title,
+                  'artist': s.artist,
+                  'artistId': s.artistId,
+                  'album': s.album,
+                  'albumId': s.albumId,
+                  'thumbnailUrl': s.thumbnailUrl,
+                  'durationSeconds': s.durationSeconds,
+                })
+            .toList(),
+      },
+    };
+  }
+
+  /// Imports a single playlist exported by [exportPlaylist].
+  /// Always assigns a fresh UUID so the imported copy never collides with
+  /// an existing playlist (two users sharing the same file both get their
+  /// own independent copy).
+  Future<void> importPlaylist(Map<String, dynamic> data) async {
+    final m = data['playlist'] as Map<String, dynamic>?;
+    if (m == null) return;
+
+    // Save any songs not already in the DB
+    for (final songRaw in (m['songs'] as List? ?? [])) {
+      final sm = songRaw as Map<String, dynamic>;
+      if (getSong(sm['id'] as String) == null) {
+        await saveSong(Song(
+          id: sm['id'] as String,
+          title: sm['title'] as String,
+          artist: sm['artist'] as String,
+          artistId: sm['artistId'] as String,
+          album: sm['album'] as String,
+          albumId: sm['albumId'] as String,
+          thumbnailUrl: sm['thumbnailUrl'] as String,
+          durationSeconds: sm['durationSeconds'] as int,
+        ));
+      }
+    }
+
+    // Always create with a new ID so sharing never silently no-ops
+    await savePlaylist(Playlist(
+      id: const Uuid().v4(),
+      name: m['name'] as String,
+      description: m['description'] as String?,
+      songIds: List<String>.from(m['songIds'] as List),
+      createdAt: DateTime.now(),
+    ));
   }
 }

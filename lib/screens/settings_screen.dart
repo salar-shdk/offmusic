@@ -143,11 +143,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () => _importLibrary(context),
           ),
           const Divider(),
+          const _SectionTitle('Android Auto'),
+          _AutoPlayAutoTile(),
+          const Divider(),
           const _SectionTitle('About'),
           const ListTile(
             leading: Icon(Icons.info_outline_rounded),
             title: Text('offmusic'),
-            subtitle: Text('Version 1.2.1'),
+            subtitle: Text('Version 1.2.2'),
           ),
           ListTile(
             leading: const Icon(Icons.code_rounded),
@@ -194,6 +197,21 @@ class _AutoDeleteTile extends StatelessWidget {
                 ))
             .toList(),
       ),
+    );
+  }
+}
+
+class _AutoPlayAutoTile extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final lib = context.watch<LibraryProvider>();
+    return SwitchListTile(
+      secondary: const Icon(Icons.directions_car_rounded),
+      title: const Text('Auto-play on connect'),
+      subtitle: const Text(
+          'Automatically resume playback when Android Auto connects'),
+      value: lib.autoPlayOnAutoConnect,
+      onChanged: (v) => lib.setAutoPlayOnAutoConnect(v),
     );
   }
 }

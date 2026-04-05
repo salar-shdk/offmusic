@@ -37,5 +37,4 @@ object AutoDataStore {
     @Volatile var categories:           List<AutoCategory> = emptyList()
     @Volatile var lyricsWithTimestamps: List<LyricLine>    = emptyList()
     @Volatile var showAutoLyrics:       Boolean            = false
-    @Volatile var autoPlayOnConnect:    Boolean            = false
 }

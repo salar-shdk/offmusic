@@ -434,12 +434,6 @@ class AudioPlayerService {
     } catch (_) {}
   }
 
-  Future<void> setAutoAutoplay(bool enabled) async {
-    try {
-      await _method.invokeMethod('auto_setAutoplay', {'enabled': enabled});
-    } catch (_) {}
-  }
-
   static Map<String, String> _songToAutoMap(Song song) => {
     'id': song.id,
     'title': song.title,

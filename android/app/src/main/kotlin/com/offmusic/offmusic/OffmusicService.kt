@@ -163,10 +163,6 @@ class OffmusicService : MediaLibraryService() {
             // Show the lyrics button in Android Auto but not in the phone notification
             if (isAutoController(controller)) {
                 session.setCustomLayout(lyricsLayout())
-                // Auto-resume playback if the user has the setting enabled
-                if (AutoDataStore.autoPlayOnConnect) {
-                    Handler(Looper.getMainLooper()).post { resumeForAuto() }
-                }
             }
             return MediaSession.ConnectionResult.accept(commands, result.availablePlayerCommands)
         }
@@ -328,27 +324,6 @@ class OffmusicService : MediaLibraryService() {
             return pkg == "com.google.android.projection.gearhead" ||
                    pkg.contains("gearhead") ||
                    pkg.contains("automotive")
-        }
-    }
-
-    /**
-     * Called on the main thread when Android Auto connects with auto-play enabled.
-     * Resumes playback if ExoPlayer already has a media item loaded (e.g. the user
-     * was listening before getting in the car). If the player has no media but
-     * Quick Picks are available, starts the first one.
-     */
-    private fun resumeForAuto() {
-        val player = sharedPlayer ?: return
-        val exo = player.exoPlayer
-        if (exo.mediaItemCount > 0) {
-            // Re-prepare if idle (e.g. player was stopped), then play
-            if (exo.playbackState == Player.STATE_IDLE) exo.prepare()
-            exo.play()
-        } else if (AutoDataStore.quickPicks.isNotEmpty()) {
-            val song = AutoDataStore.quickPicks[0]
-            player.play(song.id, title = song.title, artist = song.artist,
-                thumbnailUrl = song.thumbnailUrl)
-            player.sendAutoQueue(AutoDataStore.quickPicks, 0)
         }
     }
 

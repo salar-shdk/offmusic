@@ -15,7 +15,8 @@ import '../services/audio_service.dart';
 
 /// Possible values for auto-delete setting.
 /// null = never, otherwise days threshold.
-const _kAutoDeleteKey = 'auto_delete_days';
+const _kAutoDeleteKey      = 'auto_delete_days';
+const _kAutoPlayAutoKey    = 'auto_play_on_auto_connect';
 
 class LibraryProvider extends ChangeNotifier {
   final DatabaseService _db;
@@ -23,6 +24,7 @@ class LibraryProvider extends ChangeNotifier {
   final AudioPlayerService _audioService;
   StreamSubscription? _songCachedSub;
   int? _autoDeleteDays; // null = never
+  bool _autoPlayOnAutoConnect = false;
 
   List<Song> _likedSongs = [];
   List<Album> _likedAlbums = [];
@@ -30,7 +32,8 @@ class LibraryProvider extends ChangeNotifier {
   List<Playlist> _playlists = [];
   List<Song> _cachedSongs = [];
 
-  int? get autoDeleteDays => _autoDeleteDays;
+  int? get autoDeleteDays          => _autoDeleteDays;
+  bool get autoPlayOnAutoConnect   => _autoPlayOnAutoConnect;
 
   LibraryProvider(this._db, this._cache, this._audioService) {
     _refresh();
@@ -41,11 +44,24 @@ class LibraryProvider extends ChangeNotifier {
   Future<void> _loadPrefsAndCleanup() async {
     final prefs = await SharedPreferences.getInstance();
     _autoDeleteDays = prefs.getInt(_kAutoDeleteKey);
+    _autoPlayOnAutoConnect = prefs.getBool(_kAutoPlayAutoKey) ?? false;
     notifyListeners();
+    // Push autoplay setting to native so it's ready before Auto connects
+    if (_autoPlayOnAutoConnect) {
+      await _audioService.setAutoAutoplay(true);
+    }
     if (_autoDeleteDays != null) {
       await _db.deleteUnplayedSongs(_autoDeleteDays!);
       _refresh();
     }
+  }
+
+  Future<void> setAutoPlayOnAutoConnect(bool value) async {
+    _autoPlayOnAutoConnect = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kAutoPlayAutoKey, value);
+    await _audioService.setAutoAutoplay(value);
+    notifyListeners();
   }
 
   Future<void> setAutoDeleteDays(int? days) async {

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
@@ -143,6 +144,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () => _importLibrary(context),
           ),
           const Divider(),
+          const _SectionTitle('Links'),
+          ListTile(
+            leading: const Icon(Icons.open_in_new_rounded),
+            title: const Text('Open YouTube Music links in offmusic'),
+            subtitle: const Text('Set offmusic as the default handler for music.youtube.com links'),
+            onTap: () async {
+              try {
+                await const MethodChannel('com.offmusic.offmusic/links')
+                    .invokeMethod('openDefaultAppsSettings');
+              } catch (_) {}
+            },
+          ),
+          const Divider(),
           const _SectionTitle('Android Auto'),
           _AutoPlayAutoTile(),
           const Divider(),
@@ -150,7 +164,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const ListTile(
             leading: Icon(Icons.info_outline_rounded),
             title: Text('offmusic'),
-            subtitle: Text('Version 1.2.2'),
+            subtitle: Text('Version 1.3.0'),
           ),
           ListTile(
             leading: const Icon(Icons.code_rounded),

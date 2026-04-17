@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'services/youtube_service.dart';
 import 'services/audio_service.dart';
@@ -15,6 +16,7 @@ import 'screens/home_screen.dart';
 import 'screens/search_screen.dart';
 import 'screens/library_screen.dart';
 import 'screens/settings_screen.dart';
+import 'screens/now_playing_screen.dart';
 import 'widgets/mini_player.dart';
 
 class OffMusicApp extends StatefulWidget {
@@ -87,6 +89,7 @@ class _RootScaffold extends StatefulWidget {
 class _RootScaffoldState extends State<_RootScaffold> {
   int _selectedIndex = 0;
   final _searchFocusNode = FocusNode();
+  static const _linkChannel = MethodChannel('com.offmusic.offmusic/links');
 
   late final List<Widget> _screens;
 
@@ -99,6 +102,47 @@ class _RootScaffoldState extends State<_RootScaffold> {
       const LibraryScreen(),
       const SettingsScreen(),
     ];
+    _initLinkHandling();
+  }
+
+  void _initLinkHandling() {
+    // Handle links arriving while the app is already running
+    _linkChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onLink') _handleLink(call.arguments as String?);
+    });
+    // Handle cold-start link (app opened via a shared link)
+    _linkChannel.invokeMethod<String>('getInitialLink').then((url) {
+      if (url != null) _handleLink(url);
+    });
+  }
+
+  Future<void> _handleLink(String? url) async {
+    if (url == null || !mounted) return;
+    final videoId = _extractVideoId(url);
+    if (videoId == null) return;
+
+    final youtube = context.read<YouTubeService>();
+    final player = context.read<PlayerProvider>();
+
+    final song = await youtube.getVideoDetails(videoId);
+    if (song == null || !mounted) return;
+
+    await player.playSong(song);
+    if (mounted) openNowPlaying(context);
+  }
+
+  /// Extracts the video ID from a YouTube Music URL or shared text containing one.
+  /// Supports: https://music.youtube.com/watch?v=VIDEO_ID
+  String? _extractVideoId(String text) {
+    try {
+      // Find the YTM URL within any shared text (e.g. "Check this out https://...")
+      final match = RegExp(r'music\.youtube\.com/watch\?[^\s]+').firstMatch(text);
+      if (match == null) return null;
+      final uri = Uri.parse('https://${match.group(0)}');
+      return uri.queryParameters['v'];
+    } catch (_) {
+      return null;
+    }
   }
 
   @override

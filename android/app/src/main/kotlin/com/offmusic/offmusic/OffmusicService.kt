@@ -149,6 +149,11 @@ class OffmusicService : MediaLibraryService() {
 
     inner class BrowseCallback : MediaLibrarySession.Callback {
 
+        // Debounce disconnect: cancel pending pause if Auto reconnects quickly
+        // (screen wake, brief BT blip) to avoid spurious random stops.
+        private var disconnectRunnable: Runnable? = null
+        private val disconnectHandler = Handler(Looper.getMainLooper())
+
         // Register the lyrics toggle command so Auto can use it.
         // The lyrics button is pushed to Auto via setCustomLayout only when
         // Auto connects, so the phone notification never shows the extra button.
@@ -160,12 +165,14 @@ class OffmusicService : MediaLibraryService() {
             val commands = result.availableSessionCommands.buildUpon()
                 .add(SessionCommand(CMD_TOGGLE_LYRICS, Bundle.EMPTY))
                 .build()
-            // Show the lyrics button in Android Auto but not in the phone notification
             if (isAutoController(controller)) {
+                // Cancel any pending disconnect-pause (transient reconnect)
+                disconnectRunnable?.let { disconnectHandler.removeCallbacks(it) }
+                disconnectRunnable = null
+
                 session.setCustomLayout(lyricsLayout())
-                // Auto-resume playback if the user has the setting enabled
                 if (AutoDataStore.autoPlayOnConnect) {
-                    Handler(Looper.getMainLooper()).post { resumeForAuto() }
+                    disconnectHandler.post { resumeForAuto() }
                 }
             }
             return MediaSession.ConnectionResult.accept(commands, result.availablePlayerCommands)
@@ -317,9 +324,12 @@ class OffmusicService : MediaLibraryService() {
             controller: MediaSession.ControllerInfo,
         ) {
             if (isAutoController(controller)) {
-                Handler(Looper.getMainLooper()).post {
-                    sharedPlayer?.pause()
-                }
+                // Wait 2 s before pausing — if Auto reconnects within that window
+                // (transient BT drop, screen wake) the runnable is cancelled in
+                // onConnect and music keeps playing uninterrupted.
+                val r = Runnable { sharedPlayer?.pause() }
+                disconnectRunnable = r
+                disconnectHandler.postDelayed(r, 2000)
             }
         }
 
@@ -340,15 +350,18 @@ class OffmusicService : MediaLibraryService() {
     private fun resumeForAuto() {
         val player = sharedPlayer ?: return
         val exo = player.exoPlayer
-        if (exo.mediaItemCount > 0) {
-            // Re-prepare if idle (e.g. player was stopped), then play
-            if (exo.playbackState == Player.STATE_IDLE) exo.prepare()
-            exo.play()
-        } else if (AutoDataStore.quickPicks.isNotEmpty()) {
-            val song = AutoDataStore.quickPicks[0]
-            player.play(song.id, title = song.title, artist = song.artist,
-                thumbnailUrl = song.thumbnailUrl)
-            player.sendAutoQueue(AutoDataStore.quickPicks, 0)
+        when {
+            // Track already loaded and paused — just resume, never re-prepare
+            // (prepare() reloads the stream and interrupts active playback)
+            exo.playbackState == Player.STATE_READY && !exo.isPlaying -> exo.play()
+            // Nothing loaded yet — start the first Quick Pick
+            exo.mediaItemCount == 0 && AutoDataStore.quickPicks.isNotEmpty() -> {
+                val song = AutoDataStore.quickPicks[0]
+                player.play(song.id, title = song.title, artist = song.artist,
+                    thumbnailUrl = song.thumbnailUrl)
+                player.sendAutoQueue(AutoDataStore.quickPicks, 0)
+            }
+            // Already playing, buffering, or ended — do nothing
         }
     }
 

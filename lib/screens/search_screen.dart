@@ -56,6 +56,7 @@ class _SearchScreenState extends State<SearchScreen>
   Widget build(BuildContext context) {
     final search = context.watch<SearchProvider>();
     final theme = Theme.of(context);
+    final isYtMode = search.searchMode == SearchMode.youtube;
 
     return Scaffold(
       appBar: AppBar(
@@ -66,7 +67,9 @@ class _SearchScreenState extends State<SearchScreen>
           onChanged: _onSearch,
           onSubmitted: _onSearch,
           decoration: InputDecoration(
-            hintText: 'Search songs, albums, artists...',
+            hintText: isYtMode
+                ? 'Search YouTube videos...'
+                : 'Search songs, albums, artists...',
             hintStyle: theme.textTheme.bodyLarge?.copyWith(color: Colors.white38),
             border: InputBorder.none,
             suffixIcon: _controller.text.isNotEmpty
@@ -81,49 +84,84 @@ class _SearchScreenState extends State<SearchScreen>
           ),
           style: theme.textTheme.bodyLarge,
         ),
-        bottom: search.hasResults
-            ? TabBar(
-                controller: _tabController,
-                tabs: [
-                  Tab(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.music_note_rounded, size: 16),
-                        const SizedBox(width: 4),
-                        Text('Songs (${search.songs.length})'),
-                      ],
+        bottom: PreferredSize(
+          preferredSize: Size.fromHeight(
+            search.hasResults && !isYtMode ? 88 : 44,
+          ),
+          child: Column(
+            children: [
+              // Mode toggle
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                child: Row(
+                  children: [
+                    _ModeChip(
+                      label: 'YouTube Music',
+                      icon: Icons.music_note_rounded,
+                      selected: !isYtMode,
+                      onTap: () => context
+                          .read<SearchProvider>()
+                          .setSearchMode(SearchMode.youtubeMusic),
                     ),
-                  ),
-                  Tab(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.album_rounded, size: 16),
-                        const SizedBox(width: 4),
-                        Text('Albums (${search.albums.length})'),
-                      ],
+                    const SizedBox(width: 8),
+                    _ModeChip(
+                      label: 'YouTube',
+                      icon: Icons.play_circle_outline_rounded,
+                      selected: isYtMode,
+                      onTap: () => context
+                          .read<SearchProvider>()
+                          .setSearchMode(SearchMode.youtube),
                     ),
-                  ),
-                  Tab(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.person_rounded, size: 16),
-                        const SizedBox(width: 4),
-                        Text('Artists (${search.artists.length})'),
-                      ],
+                  ],
+                ),
+              ),
+              // YTM sub-tabs (Songs / Albums / Artists)
+              if (search.hasResults && !isYtMode)
+                TabBar(
+                  controller: _tabController,
+                  tabs: [
+                    Tab(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.music_note_rounded, size: 16),
+                          const SizedBox(width: 4),
+                          Text('Songs (${search.songs.length})'),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
-                indicatorColor: theme.colorScheme.primary,
-                labelColor: theme.colorScheme.primary,
-                unselectedLabelColor: Colors.white54,
-                indicatorSize: TabBarIndicatorSize.tab,
-                dividerColor: Colors.transparent,
-                labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-              )
-            : null,
+                    Tab(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.album_rounded, size: 16),
+                          const SizedBox(width: 4),
+                          Text('Albums (${search.albums.length})'),
+                        ],
+                      ),
+                    ),
+                    Tab(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.person_rounded, size: 16),
+                          const SizedBox(width: 4),
+                          Text('Artists (${search.artists.length})'),
+                        ],
+                      ),
+                    ),
+                  ],
+                  indicatorColor: theme.colorScheme.primary,
+                  labelColor: theme.colorScheme.primary,
+                  unselectedLabelColor: Colors.white54,
+                  indicatorSize: TabBarIndicatorSize.tab,
+                  dividerColor: Colors.transparent,
+                  labelStyle:
+                      const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                ),
+            ],
+          ),
+        ),
       ),
       body: _buildBody(search, theme),
     );
@@ -177,6 +215,10 @@ class _SearchScreenState extends State<SearchScreen>
       );
     }
 
+    if (search.searchMode == SearchMode.youtube) {
+      return _SongsTab(songs: search.ytVideos);
+    }
+
     return TabBarView(
       controller: _tabController,
       children: [
@@ -184,6 +226,59 @@ class _SearchScreenState extends State<SearchScreen>
         _AlbumsTab(albums: search.albums),
         _ArtistsTab(artists: search.artists),
       ],
+    );
+  }
+}
+
+class _ModeChip extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ModeChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected
+              ? theme.colorScheme.primary.withOpacity(0.2)
+              : Colors.white.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: selected ? theme.colorScheme.primary : Colors.white24,
+            width: 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon,
+                size: 14,
+                color: selected ? theme.colorScheme.primary : Colors.white54),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: selected ? theme.colorScheme.primary : Colors.white54,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

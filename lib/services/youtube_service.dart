@@ -1308,6 +1308,16 @@ class YouTubeService {
     return songs;
   }
 
+  /// Search YouTube (not YTM) and return up to [limit] video results as Songs.
+  Future<List<Song>> searchYouTube(String query, {int limit = 30}) async {
+    try {
+      final results = await _yt.search.getVideos(query);
+      return results.take(limit).map(_videoToSong).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
   Song _videoToSong(Video video) {
     return Song(
       id: video.id.value,

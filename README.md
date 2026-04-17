@@ -7,7 +7,7 @@
   <a href="https://buymeacoffee.com/salar_shdk">
     <img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-☕-yellow" alt="Buy Me a Coffee">
   </a>
-  <img src="https://img.shields.io/badge/version-1.2.1-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.3.0-blue" alt="Version">
 </p>
 
 
